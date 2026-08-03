@@ -72,6 +72,7 @@ def chunk_hash(request_id: str) -> str:
 def ingest(args) -> None:
     samples = load_locomo()
     chunks: dict[str, dict] = {}
+    pending: list[dict] = []
     for index in args.conv:
         sample = samples[index]
         conversation = sample["conversation"]
@@ -97,17 +98,23 @@ def ingest(args) -> None:
                     message_dias[str(len(messages) - 1)] = turn.get("dia_id", "")
                 if not messages:
                     continue
-                body = post(f"{args.server}/add", {
-                    "request_id": request_id, "messages": messages,
-                    "user_id": user_id, "session_id": f"local:{args.tag}:conv-{index}:s{number}",
+                pending.append({
+                    "request_id": request_id, "messages": messages, "user_id": user_id,
+                    "session_id": f"local:{args.tag}:conv-{index}:s{number}",
                 })
-                assert body.get("success") is True, body
                 chunks[chunk_hash(request_id)] = {
                     "conv": index,
                     "dias": [d for d in message_dias.values() if d],
                     "msg_dias": message_dias,
                 }
-                print(f"  added {request_id} ({len(messages)} messages)", flush=True)
+
+    def send(payload: dict) -> None:
+        body = post(f"{args.server}/add", payload)
+        assert body.get("success") is True, body
+        print(f"  added {payload['request_id']} ({len(payload['messages'])} messages)", flush=True)
+
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        list(pool.map(send, pending))
     target = OUT / args.tag
     target.mkdir(parents=True, exist_ok=True)
     (target / "chunks.json").write_text(json.dumps(chunks, ensure_ascii=False), encoding="utf-8")
@@ -184,6 +191,14 @@ def report(args) -> None:
             if any(item_dias(entry["id"], chunks) & gold for entry in row["ranked"][:k]):
                 hits += 1
         print(f"  {k:<5} {hits/len(scored):.3f}   ({hits}/{len(scored)})")
+    for kind, label in (("r", "verbatim turns only"), ("f", "extracted facts only")):
+        hits = 0
+        for row in scored:
+            gold = set(row["evidence"])
+            filtered = [e for e in row["ranked"] if re.fullmatch(rf"[0-9a-f]{{16}}-{kind}\d+", e["id"])]
+            if any(item_dias(entry["id"], chunks) & gold for entry in filtered[:20]):
+                hits += 1
+        print(f"  recall@20 using {label}: {hits/len(scored):.3f}")
     by_category: dict[int, list[int]] = {}
     for row in scored:
         gold = set(row["evidence"])
