@@ -150,7 +150,7 @@ def startup() -> None:
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", **store.stats(), "llm": config.llm_available()}
+    return {"status": "ok", **store.stats(), "llm": config.llm_available(), **llm.counters}
 
 
 @app.post("/add", response_model=AddResponse)

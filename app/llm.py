@@ -17,6 +17,10 @@ log = logging.getLogger("ami.llm")
 
 _client = None
 _lock = threading.Lock()
+# The platform drives Add with up to 64 workers; cap our own fan-out at the
+# provider so a burst degrades into queueing rather than into 429s.
+_gate = threading.Semaphore(config.LLM_CONCURRENCY)
+counters = {"calls": 0, "failures": 0}
 
 EXTRACT_SYSTEM = """You turn a chunk of a conversation into atomic memories for a personal memory index.
 
@@ -61,15 +65,18 @@ def _get_client():
 def _complete(system: str, user: str, max_tokens: int) -> str | None:
     if not config.llm_available():
         return None
+    counters["calls"] += 1
     try:
-        response = _get_client().chat.completions.create(
-            model=config.LLM_MODEL,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            temperature=0,
-            max_tokens=max_tokens,
-        )
+        with _gate:
+            response = _get_client().chat.completions.create(
+                model=config.LLM_MODEL,
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                temperature=0,
+                max_tokens=max_tokens,
+            )
         return (response.choices[0].message.content or "").strip()
     except Exception as exc:  # network, quota, provider error — degrade, never fail Add
+        counters["failures"] += 1
         log.warning("llm call failed: %s", exc)
         return None
 

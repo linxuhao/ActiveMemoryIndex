@@ -33,6 +33,7 @@ LLM_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 LLM_TIMEOUT = _float("AMI_LLM_TIMEOUT", 30.0)
 LLM_RETRIES = _int("AMI_LLM_RETRIES", 2)
 LLM_MAX_FACTS = _int("AMI_LLM_MAX_FACTS", 24)
+LLM_CONCURRENCY = _int("AMI_LLM_CONCURRENCY", 16)
 
 # Feature switches: with no API key both fall back to the raw-text-only path.
 EXTRACT_ENABLED = os.environ.get("AMI_EXTRACT", "1") != "0"
