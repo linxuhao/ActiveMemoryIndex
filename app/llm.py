@@ -100,9 +100,19 @@ def _parse_facts(text: str) -> list[str]:
                 return [str(f).strip() for f in facts if str(f).strip()]
         except json.JSONDecodeError:
             pass
-    # Fallback: a bare list of lines.
-    lines = [re.sub(r"^\s*(?:[-*]|\d+[.)])\s*", "", line).strip(' "') for line in text.splitlines()]
-    return [line for line in lines if len(line) > 3][: config.LLM_MAX_FACTS]
+    # Fallback for a bare list. Deliberately narrow: only bulleted, numbered or
+    # timestamped lines qualify. Prose is a sign the model answered something
+    # else entirely, and storing that prose as memories poisons retrieval
+    # silently — an empty return is the safe reading.
+    facts = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not re.match(r"^(?:[-*]|\d+[.)]|\[)", stripped):
+            continue
+        cleaned = re.sub(r"^\s*(?:[-*]|\d+[.)])\s*", "", stripped).strip(' "')
+        if len(cleaned) > 3:
+            facts.append(cleaned)
+    return facts[: config.LLM_MAX_FACTS]
 
 
 def extract_facts(chunk_text: str) -> list[str]:
