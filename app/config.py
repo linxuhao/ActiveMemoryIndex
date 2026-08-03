@@ -30,10 +30,14 @@ EMBED_BATCH = _int("AMI_EMBED_BATCH", 64)
 LLM_MODEL = os.environ.get("AMI_LLM_MODEL", "gpt-4o-mini")
 LLM_BASE_URL = os.environ.get("OPENAI_BASE_URL", "") or None
 LLM_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-LLM_TIMEOUT = _float("AMI_LLM_TIMEOUT", 30.0)
+LLM_TIMEOUT = _float("AMI_LLM_TIMEOUT", 60.0)
 LLM_RETRIES = _int("AMI_LLM_RETRIES", 2)
 LLM_MAX_FACTS = _int("AMI_LLM_MAX_FACTS", 24)
 LLM_CONCURRENCY = _int("AMI_LLM_CONCURRENCY", 16)
+# Reasoning models spend tokens before answering; raise these when developing
+# against one. gpt-4o-mini never needs the headroom, and unused caps cost nothing.
+LLM_MAX_TOKENS_EXTRACT = _int("AMI_LLM_MAX_TOKENS_EXTRACT", 1200)
+LLM_MAX_TOKENS_QUERY = _int("AMI_LLM_MAX_TOKENS_QUERY", 200)
 
 # Feature switches: with no API key both fall back to the raw-text-only path.
 EXTRACT_ENABLED = os.environ.get("AMI_EXTRACT", "1") != "0"

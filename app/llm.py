@@ -46,6 +46,15 @@ Rules:
 5. One line, no preamble, no quotes."""
 
 
+_REASONING = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+
+
+def _strip_reasoning(text: str) -> str:
+    """Drop a reasoning block. gpt-4o-mini emits none; local dev models do."""
+    text = _REASONING.sub("", text)
+    return "" if "<think>" in text else text.strip()
+
+
 def _get_client():
     global _client
     if _client is None:
@@ -74,7 +83,7 @@ def _complete(system: str, user: str, max_tokens: int) -> str | None:
                 temperature=0,
                 max_tokens=max_tokens,
             )
-        return (response.choices[0].message.content or "").strip()
+        return _strip_reasoning(response.choices[0].message.content or "")
     except Exception as exc:  # network, quota, provider error — degrade, never fail Add
         counters["failures"] += 1
         log.warning("llm call failed: %s", exc)
@@ -100,7 +109,7 @@ def extract_facts(chunk_text: str) -> list[str]:
     """Add path: atomic, self-contained, timestamped memories."""
     if not config.EXTRACT_ENABLED:
         return []
-    raw = _complete(EXTRACT_SYSTEM % config.LLM_MAX_FACTS, chunk_text, max_tokens=1200)
+    raw = _complete(EXTRACT_SYSTEM % config.LLM_MAX_FACTS, chunk_text, config.LLM_MAX_TOKENS_EXTRACT)
     if raw is None:
         return []
     return _parse_facts(raw)[: config.LLM_MAX_FACTS]
@@ -113,7 +122,7 @@ def recall_question(query: str, options: list[str] | None) -> str | None:
     user = f"Question: {query}"
     if options:
         user += "\nAnswer options: " + " | ".join(str(o) for o in options[:10])
-    raw = _complete(RECALL_SYSTEM, user, max_tokens=120)
+    raw = _complete(RECALL_SYSTEM, user, config.LLM_MAX_TOKENS_QUERY)
     if not raw:
         return None
     return raw.splitlines()[0].strip(' "')

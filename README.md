@@ -49,6 +49,8 @@ All configuration is environment variables; **no credential is stored in this re
 | `AMI_LLM_MODEL` | `gpt-4o-mini` | the model used by Add and Search. The challenge requires `gpt-4o-mini`; leave it. |
 | `OPENAI_BASE_URL` | *(unset)* | any OpenAI-compatible endpoint. Local development only. |
 | `AMI_LLM_CONCURRENCY` | `16` | cap on simultaneous provider calls, so a 64-worker Add burst queues instead of hitting 429s |
+| `AMI_LLM_TIMEOUT` | `60` | seconds per provider call |
+| `AMI_LLM_MAX_TOKENS_EXTRACT` / `_QUERY` | `1200` / `200` | completion caps; raise only when developing against a reasoning model |
 | `AMI_RECALL_WEIGHT` | `0.5` | weight of the user-voice recall-question channel in the fused score |
 | `AMI_RETURN_LIMIT` | `40` | maximum memories returned (never more than `top_k`) |
 | `AMI_RETURN_CHAR_BUDGET` | `12000` | character budget for one response |

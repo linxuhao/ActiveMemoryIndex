@@ -6,3 +6,5 @@ data/
 *.sqlite3-*
 .DS_Store
 .venv/
+bench/out/
+bench/third_party/
