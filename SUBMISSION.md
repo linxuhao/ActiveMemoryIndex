@@ -46,7 +46,7 @@ returned within `top_k`. Search returns evidence only and never generates an ans
 ## Disclosure
 
 The method comes from the submitter's own prior research — *An Index, Not a Store* (Xuhao Lin,
-2026), [doi:10.5281/zenodo.21405875](https://doi.org/10.5281/zenodo.21405875), research code at
+2026), [doi:10.5281/zenodo.21405963](https://doi.org/10.5281/zenodo.21405963), research code at
 <https://github.com/linxuhao/index-not-store>. The register-matching retrieval finding and the
 context-dilution measurement motivating the return policy are from that work; those numbers were
 measured on a different benchmark and backbone and are not claimed to transfer. The service code

@@ -42,6 +42,11 @@ LLM_MAX_TOKENS_QUERY = _int("AMI_LLM_MAX_TOKENS_QUERY", 200)
 # Feature switches: with no API key both fall back to the raw-text-only path.
 EXTRACT_ENABLED = os.environ.get("AMI_EXTRACT", "1") != "0"
 RECALL_QUERY_ENABLED = os.environ.get("AMI_RECALL_QUERY", "1") != "0"
+# Local reasoning models (Qwen3, etc.): inject <<DISABLE_THINKING>> into the system
+# message so the gateway's thinking.jinja pre-fills a closed <think> tag. vLLM drops
+# chat_template_kwargs, so this secret-code workaround is the only reliable path.
+# Has no effect on gpt-4o-mini (the OpenAI API ignores it).
+DISABLE_THINKING = os.environ.get("AMI_LLM_DISABLE_THINKING", "0") != "0"
 
 # --- retrieval ---------------------------------------------------------------
 # Weight of the user-voice recall question channel in the fused score.

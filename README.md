@@ -124,7 +124,7 @@ scripts/         contract smoke test
 * **The method comes from our own prior research**, not from a third-party memory system:
   *An Index, Not a Store: The Model Does Remember — It Just Needs Its Notebook* (Xuhao Lin,
   independent researcher, 2026), preprint and raw timelines at
-  [doi:10.5281/zenodo.21405875](https://doi.org/10.5281/zenodo.21405875), research code at
+  [doi:10.5281/zenodo.21405963](https://doi.org/10.5281/zenodo.21405963), research code at
   <https://github.com/linxuhao/index-not-store>. The register-matching retrieval result and the
   context-dilution curve quoted above are from that work; the numbers were measured on the InMind
   benchmark with a different backbone and **do not transfer as predictions** to this leaderboard's

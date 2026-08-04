@@ -74,6 +74,11 @@ def _get_client():
 def _complete(system: str, user: str, max_tokens: int) -> str | None:
     if not config.llm_available():
         return None
+    # Gateway secret code: <<DISABLE_THINKING>> in the system message tells the
+    # serving layer's thinking.jinja to pre-fill a closed <think> tag, forcing the
+    # model to skip reasoning and answer directly. Has no effect on OpenAI API.
+    if config.DISABLE_THINKING and "<<DISABLE_THINKING>>" not in system:
+        system = "<<DISABLE_THINKING>>\n" + system
     counters["calls"] += 1
     try:
         with _gate:
