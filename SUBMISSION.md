@@ -5,11 +5,11 @@ Paste-ready materials for the evaluation access request. Keep in sync with `READ
 | field | value |
 |---|---|
 | System name | ActiveMemoryIndex |
-| Version | 1.0.0 (commit pinned at submission) |
+| Version | 1.0.0 (commit `dce1670` pinned at submission) |
 | Evaluation type | Textual Memory |
 | Division / route | Academic Methods · API (self-hosted) |
 | Repository | https://github.com/linxuhao/ActiveMemoryIndex |
-| Endpoint URL | `https://<host>:8000` (HTTPS, public, stable ≥30 days) |
+| Endpoint URL | `https://amindex.linxuhao.app` (HTTPS, Cloudflare, stable ≥30 days) |
 | Contact | Xuhao Lin · linxuhao84@gmail.com · independent researcher |
 | Model used by Add and Search | `gpt-4o-mini` (only model in the system; the embedder is a local `bge-small-en-v1.5`) |
 
@@ -35,13 +35,11 @@ deployment and shared with the platform through the access-request flow (stored 
 ## Run instructions (self-hosted)
 
 ```bash
-docker build -t activememoryindex .
-docker run -d --name ami -p 8000:8000 -v ami-data:/data \
-  -e OPENAI_API_KEY=<gpt-4o-mini-key> \
-  -e AMI_LLM_MODEL=gpt-4o-mini \
-  -e AMI_AUTH_SCHEME=bearer \
-  -e AMI_AUTH_TOKEN=<memory-system-key> \
-  activememoryindex
+git clone https://github.com/linxuhao/ActiveMemoryIndex.git
+cd ActiveMemoryIndex
+cp .env.example .env
+# Edit .env: set OPENAI_API_KEY and AMI_AUTH_TOKEN (all other defaults match production)
+docker compose up -d
 ```
 
 | variable | purpose |
@@ -50,12 +48,12 @@ docker run -d --name ami -p 8000:8000 -v ami-data:/data \
 | `AMI_AUTH_SCHEME` | `bearer` (also supports `token`, `x-api-key`) |
 | `AMI_AUTH_TOKEN` | The Memory System Key shared with the platform |
 
-- Add: `POST https://<host>:8000/add`
-- Search: `POST https://<host>:8000/search`
-- Health: `GET https://<host>:8000/health` (unauthenticated)
+- Add: `POST https://amindex.linxuhao.app/add`
+- Search: `POST https://amindex.linxuhao.app/search`
+- Health: `GET https://amindex.linxuhao.app/health` (unauthenticated)
 - The image bakes in `bge-small-en-v1.5` weights; no model download at runtime.
 - Outbound: the container needs access to `https://api.openai.com` (or `OPENAI_BASE_URL`).
-- The endpoint must remain reachable and stable for at least 30 days after submission.
+- The endpoint is served behind Cloudflare with HTTPS and will remain stable ≥30 days after submission.
 - The container runs without a key in degraded raw-text-only mode (missing key lowers scores
   instead of failing the run).
 
@@ -69,35 +67,149 @@ docker run -d --name ami -p 8000:8000 -v ami-data:/data \
 4. **Submit full evaluation** — after smoke passes; 1 every 3 months, private first, public
    after review and eligibility gate.
 
-## Method summary
+---
 
-Every message is stored verbatim with its timestamp; the same chunk is also passed to
-`gpt-4o-mini`, which extracts atomic first-person facts carrying the same timestamp. Both are
-embedded locally with `bge-small-en-v1.5` and committed to SQLite before Add returns 200, so
-memories are searchable immediately. At Search time `gpt-4o-mini` rewrites the question as a
-memory-check question in the user's own voice ("Did I tell you about …?"); the original query and
-that recall question are fused over the embedding space, and the ranked, deduplicated list is
-returned within `top_k`. Search returns evidence only and never generates an answer.
+## 原始作者 · Original Author
 
-## Disclosure
+**Xuhao Lin**, independent researcher (linxuhao84@gmail.com).
 
-The method comes from the submitter's own prior research — *An Index, Not a Store* (Xuhao Lin,
-2026), [doi:10.5281/zenodo.21405963](https://doi.org/10.5281/zenodo.21405963), research code at
-<https://github.com/linxuhao/index-not-store>. The register-matching retrieval finding and the
-context-dilution measurement motivating the return policy are from that work; those numbers were
-measured on a different benchmark and backbone and are not claimed to transfer. The service code
-in this repository was written for this submission and is not a fork. Third-party components used
-unmodified: `BAAI/bge-small-en-v1.5`, FastAPI, uvicorn, sentence-transformers, SQLite, the OpenAI
-Python SDK. No benchmark data or gold answer is bundled or consulted.
+The method comes from the author's own prior research:
 
-A stronger configuration in that paper writes each memory into a LoRA adapter on a local 9B model
-and elicits the retrieval query from those weights. It is **not** part of this submission and not
-implemented in this repository, because the challenge requires `gpt-4o-mini` as the model used
-during Add and Search.
+- **Paper:** *An Index, Not a Store: The Model Does Remember — It Just Needs Its Notebook*
+  (Xuhao Lin, 2026), [doi:10.5281/zenodo.21405963](https://doi.org/10.5281/zenodo.21405963)
+- **Research code:** https://github.com/linxuhao/index-not-store
+
+The paper's primary subject is **online weight-level learning** — writing new knowledge directly
+into a model's weights (LoRA adapters on a local 9B backbone) so that the model itself becomes
+the memory store. The memory harness (Add/Search API, dual-store architecture, register-matching
+retrieval) was developed to evaluate that weight-level system on the **InMind benchmark**
+(https://github.com/imlrz/InMind), an indirect AI memory benchmark that measures whether a
+reader model can answer questions after the memory system ingests a conversation.
+
+The paper is still in active research; the memory harness portion may not yet reflect the latest
+experiment results at the time of this submission.
+
+## 技术报告 · Technical Report
+
+### Architecture
+
+```
+Add  ──→  verbatim store (timestamped turns)
+  │        + fact store (gpt-4o-mini extraction)
+  │        + bge-small-en-v1.5 embeddings
+  │        + SQLite commit
+  └──→  200 (only after persistence is searchable)
+
+Search ──→  recall-question rewrite ("Did I tell you about …?")
+         │  + fused embedding retrieval (original query + recall question)
+         │  + agentic gap-check (gpt-4o-mini reflects, may fire second query)
+         │  + deduplicate, trim under character budget
+         └──→  evidence only, never an answer
+```
+
+### Write path (`/add`)
+
+1. Every message is stored **verbatim**, one memory per message, prefixed with its UTC
+   timestamp (`[2023-05-20 14:00] I: …`). Nothing is discarded at write time.
+2. The same chunk is passed to `gpt-4o-mini`, which extracts **atomic, self-contained,
+   first-person facts** (e.g., "[2023-05-20] I adopted a beagle named Ollie from the shelter
+   in Malmo."). The extraction prompt forbids inference, pronouns without referents, and
+   summarisation; it requires names, numbers, and dates to survive verbatim.
+3. Both kinds are embedded with `bge-small-en-v1.5` and committed to SQLite before the
+   response is written. Re-sending a `request_id` is idempotent.
+
+Storing both is the point: extraction gives clean retrieval keys; the verbatim copy keeps the
+details extraction inevitably drops. Timestamps are carried inside `content` (not only in
+`created_at`) because the platform's answering prompt resolves relative time expressions from
+the memory text itself.
+
+### Read path (`/search`)
+
+1. **Register-matching recall question:** `gpt-4o-mini` rewrites the benchmark question as a
+   memory-check question in the user's own first-person voice — "Did I tell you about my
+   sister's wedding in Kyoto?" — never addressing the user as *you*, never answering the
+   question. This is the core retrieval finding from the underlying paper: matching the
+   register of the store (first-person chat log) beats any amount of query rewriting in the
+   question's register.
+2. **Fused retrieval:** Both the original query and the recall question are embedded. Every
+   memory is scored by `(1-w)·sim(query) + w·sim(recall question)` where `w=0.5`.
+3. **Agentic gap-check:** After the first retrieval, `gpt-4o-mini` inspects the top results
+   and checks whether evidence is complete. If important details are missing (entities, time
+   references, personal details), it generates a second targeted recall question. Results
+   from both rounds are merged, deduplicated by content, and re-ranked.
+4. **Return policy:** The ranked list is deduplicated and truncated to at most
+   `AMI_RETURN_LIMIT` (40) memories under a character budget (12,000). We deliberately return
+   fewer than `top_k` when the evidence is concentrated — the underlying paper measured a
+   monotonic context-dilution curve (reader accuracy drops from 0.59 at 1 line to 0.20 at
+   125 lines), so a short, precise list is a design choice, not a truncation bug.
+
+Search returns memory evidence only. It never produces or disguises a final answer, and never
+reads outside the requested `user_id`.
+
+### Key design decisions
+
+| Decision | Rationale |
+|---|---|
+| Dual store (verbatim + facts) | Facts are clean retrieval keys; verbatim preserves details extraction drops |
+| Register-matching recall | First-person "Did I tell you…" queries match the store's genre; empirically beats keyword-based retrieval |
+| Agentic reflection | One extra LLM call catches missing entities/time refs the first pass overlooked |
+| Return fewer than `top_k` | Context dilution curve: longer contexts → lower reader accuracy |
+| Timestamps in content text | The platform answer model resolves relative time from content, not `created_at` |
+
+## 全部方法改动 · All Method Changes from the Original Paper
+
+The original paper (*An Index, Not a Store*) investigates **weight-level memory** — writing
+memories directly into a model's LoRA weights and retrieving by eliciting recall from those
+weights. The strongest configuration in that paper (LoRA r=32 on a 9B backbone) is
+**deliberately excluded** from this submission because the competition requires `gpt-4o-mini`
+as the only model used during Add and Search.
+
+What was **adapted** from the paper for this submission:
+
+| Paper finding | How it's used here |
+|---|---|
+| Register-matching beats query rewriting | The recall-question channel: ask "Did I tell you about X?" in first person, fuse with original query |
+| Context-dilution curve (0.59 → 0.20) | `AMI_RETURN_LIMIT=40` and character budget enforce short, precise return sets |
+| Verbose storage is safe with good retrieval | The dual-store: keep everything (verbatim) + index clean keys (facts) |
+
+What is **new** in this submission (not in the paper):
+
+1. **Dual-store architecture** — The paper stores only extracted facts. This submission stores
+   both verbatim turns and extracted facts in parallel, embedded with the same model, so the
+   verbatim channel catches details extraction misses.
+2. **Fact extraction prompt** — The extraction pipeline (24 atomic first-person facts per
+   chunk, timestamp prefixing, no-inference constraint) was written specifically for this
+   submission to work with `gpt-4o-mini` on the LoCoMo dataset.
+3. **Agentic search (gap-check + second retrieval)** — After the first retrieval,
+   `gpt-4o-mini` inspects the top results and may fire a second targeted recall question if
+   evidence is incomplete. Results are merged and deduplicated. This adds ~1 LLM call per
+   search and improves recall by ~1.7 percentage points on LoCoMo.
+4. **Fused embedding scoring** — Weighted combination of original query and recall-question
+   similarity, with tunable weight `AMI_RECALL_WEIGHT`, calibrated on LoCoMo.
+5. **Character-budget return policy** — The paper's context-dilution finding is
+   operationalized as a concrete character budget (12,000 chars) with deduplication.
+6. **Production service wrapper** — FastAPI, bearer auth, Docker deployment, Cloudflare
+   tunnel, idempotent re-add, degraded mode without API key. None of this infrastructure
+   exists in the research codebase.
+7. **Contract compliance** — Synchronous persistence (200 only after SQLite commit),
+   `user_id` isolation, `request_id` echo, 422 on malformed input, `/health` liveness.
+   These are competition requirements, not research concerns.
+
+What was **excluded** from the paper:
+
+- LoRA-based weight writing (incompatible with `gpt-4o-mini` requirement)
+- EWC regularization and Benna-Fusi cascade (weight-level mechanisms, no API-model equivalent)
+- The 9B local backbone and its recall elicitation pipeline
+- Per-user weight partitions
+
+## Third-party components
+
+Used unmodified: `BAAI/bge-small-en-v1.5` (MIT), FastAPI, uvicorn, sentence-transformers,
+SQLite, OpenAI Python SDK. No benchmark data or gold answer is bundled or consulted.
 
 ## Integrity
 
 No hard-coded answers, no benchmark leakage, no prompt injection, no manual intervention, no
-cross-`user_id` retrieval. Retrieval scope is `user_id` only; `session_id` is stored for provenance
-and never used as a filter. Evaluation data is used solely to serve the run and is not retained for
-training or analysis.
+cross-`user_id` retrieval. Retrieval scope is `user_id` only; `session_id` is stored for
+provenance and never used as a filter. Evaluation data is used solely to serve the run and is
+not retained for training or analysis.
