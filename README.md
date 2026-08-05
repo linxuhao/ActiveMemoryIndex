@@ -13,11 +13,17 @@ at retrieval time than any amount of query rewriting in the question's register.
 ## Quick start (Docker, self-hosted)
 
 ```bash
+# Clone and deploy with docker compose (recommended):
+git clone https://github.com/linxuhao/ActiveMemoryIndex.git
+cd ActiveMemoryIndex
+cp .env.example .env
+# Edit .env: set OPENAI_API_KEY and AMI_AUTH_TOKEN (everything else has sensible defaults)
+docker compose up -d
+
+# Or standalone docker run:
 docker build -t activememoryindex .
 docker run -d --name ami -p 8000:8000 -v ami-data:/data \
   -e OPENAI_API_KEY="$OPENAI_API_KEY" \
-  -e AMI_LLM_MODEL=gpt-4o-mini \
-  -e AMI_AUTH_SCHEME=bearer \
   -e AMI_AUTH_TOKEN="$AMI_AUTH_TOKEN" \
   activememoryindex
 ```
@@ -59,6 +65,7 @@ All configuration is environment variables; **no credential is stored in this re
 | `AMI_RECALL_WEIGHT` | `0.5` | weight of the user-voice recall-question channel in the fused score |
 | `AMI_RETURN_LIMIT` | `40` | maximum memories returned (never more than `top_k`) |
 | `AMI_RETURN_CHAR_BUDGET` | `12000` | character budget for one response |
+| `AMI_AGENTIC_SEARCH` | `1` | after retrieval, gpt-4o-mini reflects on gaps and may fire a second recall question. Adds ~1 LLM call per search; improves recall ~1.7 pp |
 | `AMI_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | embedding model, runs locally on CPU |
 | `AMI_DB_PATH` | `/data/memory.sqlite3` | SQLite file |
 | `AMI_AUTH_SCHEME` | `bearer` | `none` \| `bearer` \| `token` \| `x-api-key`. Formal evals require auth; `none` is for local smoke only. |
@@ -96,6 +103,9 @@ expressions from the memory text itself.
    the fused similarity `(1-w)·sim(query) + w·sim(recall question)`.
 3. The ranked list is deduplicated and truncated to at most `AMI_RETURN_LIMIT` memories, always
    within `top_k`, under a character budget.
+4. When `AMI_AGENTIC_SEARCH=1` (the default), `gpt-4o-mini` inspects the top results and may fire
+   a second targeted recall question if evidence is missing; results from both rounds are merged
+   and deduplicated.
 
 Search returns memory evidence only. It never produces or disguises a final answer, and never
 reads outside the requested `user_id`.

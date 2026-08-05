@@ -58,7 +58,7 @@ RETURN_CHAR_BUDGET = _int("AMI_RETURN_CHAR_BUDGET", 12000)
 # Agentic search: after the first retrieval, gpt-4o-mini checks whether the
 # evidence is complete and may fire a second targeted recall question. Each
 # round costs one extra LLM call + one extra embed pass.
-AGENTIC_SEARCH = os.environ.get("AMI_AGENTIC_SEARCH", "0") != "0"
+AGENTIC_SEARCH = os.environ.get("AMI_AGENTIC_SEARCH", "1") != "0"
 AGENTIC_MAX_ROUNDS = _int("AMI_AGENTIC_MAX_ROUNDS", 2)  # 2 = one reflection after the initial pass
 
 # --- auth (the platform smoke path uses none) --------------------------------
