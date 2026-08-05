@@ -29,6 +29,24 @@ OUT = HERE / "out"
 CHUNK_MESSAGES = 20
 EXCLUDED_CATEGORY = 5  # adversarial: no supporting memory exists
 
+
+def _load_dotenv() -> None:
+    """Read .env from the project root so scripts work without manual export."""
+    env_path = HERE.parent / ".env"
+    if not env_path.is_file():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, val = stripped.partition("=")
+        key, val = key.strip(), val.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = val
+
+
+_load_dotenv()
+
 # Auth: read from the same env vars the service uses.
 _AUTH_SCHEME = os.environ.get("AMI_AUTH_SCHEME", "none").lower()
 _AUTH_TOKEN = os.environ.get("AMI_AUTH_TOKEN", "")

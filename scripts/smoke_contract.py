@@ -12,8 +12,27 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000").rstrip("/")
+
+
+def _load_dotenv() -> None:
+    """Read .env from the project root so scripts work without manual export."""
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.is_file():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, val = stripped.partition("=")
+        key, val = key.strip(), val.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = val
+
+
+_load_dotenv()
 
 # Auth: read from the same env vars the service uses so we can smoke-test
 # a protected deployment without dropping auth to "none".
