@@ -1,37 +1,73 @@
 # Submission notes — Agent Memory Challenge 2026
 
-Paste-ready材料 for the evaluation access request. Keep in sync with `README.md`.
+Paste-ready materials for the evaluation access request. Keep in sync with `README.md`.
 
 | field | value |
 |---|---|
 | System name | ActiveMemoryIndex |
 | Version | 1.0.0 (commit pinned at submission) |
 | Evaluation type | Textual Memory |
-| Division / route | Academic Methods · code submission (platform-deployed Docker) |
+| Division / route | Academic Methods · API (self-hosted) |
 | Repository | https://github.com/linxuhao/ActiveMemoryIndex |
+| Endpoint URL | `https://<host>:8000` (HTTPS, public, stable ≥30 days) |
 | Contact | Xuhao Lin · linxuhao84@gmail.com · independent researcher |
 | Model used by Add and Search | `gpt-4o-mini` (only model in the system; the embedder is a local `bge-small-en-v1.5`) |
 
-## Run instructions
+## Key flow
+
+Two keys, one in each direction:
+
+| Key | Provided by | Used for |
+|---|---|---|
+| **Eval Key** | Platform (issued after approval) | We use it to initiate smoke tests and full evaluations from the platform side |
+| **Memory System Key** | Us (generated secret) | The platform includes it in `Authorization: Bearer <key>` when calling our Add/Search endpoints |
+
+Neither key appears in the repository. The Memory System Key is set as `AMI_AUTH_TOKEN` at
+deployment and shared with the platform through the access-request flow (stored encrypted).
+
+## Authentication
+
+`AMI_AUTH_SCHEME=bearer` — the platform authenticates with `Authorization: Bearer <token>`.
+`/health` is unauthenticated (any 2xx → healthy).
+
+`none` is supported for local smoke testing only; formal evaluations require an auth scheme.
+
+## Run instructions (self-hosted)
 
 ```bash
 docker build -t activememoryindex .
-docker run -d -p 8000:8000 -v ami-data:/data \
-  -e OPENAI_API_KEY=<key> -e AMI_LLM_MODEL=gpt-4o-mini \
+docker run -d --name ami -p 8000:8000 -v ami-data:/data \
+  -e OPENAI_API_KEY=<gpt-4o-mini-key> \
+  -e AMI_LLM_MODEL=gpt-4o-mini \
+  -e AMI_AUTH_SCHEME=bearer \
+  -e AMI_AUTH_TOKEN=<memory-system-key> \
   activememoryindex
 ```
 
-* Add: `POST http://<host>:8000/add`
-* Search: `POST http://<host>:8000/search`
-* Health: `GET http://<host>:8000/health` (no authentication)
-* Authentication: none by default; `AMI_AUTH_SCHEME` supports `bearer` / `token` / `x-api-key`.
-* No credential is stored in the repository. `OPENAI_API_KEY` must be injected as an environment
-  variable at deployment. **Open question for the organizers:** for the platform-deployed code
-  route, does the platform provide the `gpt-4o-mini` access, or should the participant supply a key
-  through a private channel? The container also runs without a key, in a degraded raw-text-only
-  mode, so a missing key lowers scores instead of failing the run.
-* The image bakes in the embedding weights; the container needs no model download at run time.
-  It does need outbound access to the OpenAI-compatible endpoint.
+| variable | purpose |
+|---|---|
+| `OPENAI_API_KEY` | Our `gpt-4o-mini` API key — participant-supplied, injected at deployment |
+| `AMI_AUTH_SCHEME` | `bearer` (also supports `token`, `x-api-key`) |
+| `AMI_AUTH_TOKEN` | The Memory System Key shared with the platform |
+
+- Add: `POST https://<host>:8000/add`
+- Search: `POST https://<host>:8000/search`
+- Health: `GET https://<host>:8000/health` (unauthenticated)
+- The image bakes in `bge-small-en-v1.5` weights; no model download at runtime.
+- Outbound: the container needs access to `https://api.openai.com` (or `OPENAI_BASE_URL`).
+- The endpoint must remain reachable and stable for at least 30 days after submission.
+- The container runs without a key in degraded raw-text-only mode (missing key lowers scores
+  instead of failing the run).
+
+## Evaluation flow
+
+1. **Submit access request** — provide this metadata, endpoint URL, auth scheme, and Memory
+   System Key through the platform's request form.
+2. **Receive Eval Key** — issued after approval; used to initiate evaluations.
+3. **Run smoke test** — use the Eval Key on the platform's evaluation page to verify the
+   synchronous Add → Search → Answer → Evaluate flow (1/hour, private).
+4. **Submit full evaluation** — after smoke passes; 1 every 3 months, private first, public
+   after review and eligibility gate.
 
 ## Method summary
 

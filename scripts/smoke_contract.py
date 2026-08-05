@@ -8,11 +8,24 @@ persistence, exact ID echo, response shape, top_k bound, and user isolation.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000").rstrip("/")
+
+# Auth: read from the same env vars the service uses so we can smoke-test
+# a protected deployment without dropping auth to "none".
+_AUTH_SCHEME = os.environ.get("AMI_AUTH_SCHEME", "none").lower()
+_AUTH_TOKEN = os.environ.get("AMI_AUTH_TOKEN", "")
+_AUTH_HEADER: dict[str, str] = {}
+if _AUTH_SCHEME == "bearer":
+    _AUTH_HEADER["Authorization"] = f"Bearer {_AUTH_TOKEN}"
+elif _AUTH_SCHEME == "token":
+    _AUTH_HEADER["Authorization"] = f"Token {_AUTH_TOKEN}"
+elif _AUTH_SCHEME == "x-api-key":
+    _AUTH_HEADER["X-API-Key"] = _AUTH_TOKEN
 USER = "smoke:user-0"
 OTHER = "smoke:user-1"
 SESSION = "smoke:session-0"
@@ -53,13 +66,15 @@ def check(condition: bool, label: str) -> None:
 
 def call(path: str, payload: dict | None = None) -> tuple[int, dict]:
     url = f"{BASE}{path}"
+    headers = {"User-Agent": "AMI-SmokeTest/1.0", **_AUTH_HEADER}
     if payload is None:
-        request = urllib.request.Request(url, method="GET")
+        request = urllib.request.Request(url, method="GET", headers=headers)
     else:
+        headers["Content-Type"] = "application/json"
         request = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST",
         )
     try:

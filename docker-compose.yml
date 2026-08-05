@@ -1,0 +1,51 @@
+# docker-compose.yml — ActiveMemoryIndex self-hosted memory service.
+#
+#   docker compose up -d        # build + start
+#   docker compose ps           # status
+#   docker compose logs -f      # tail logs
+#   docker compose down         # stop
+#
+# Cloudflare tunnel routing: this service joins the vip-gateway_default network
+# so the existing cloudflared connector can reach it by container name. Add a
+# public hostname in Cloudflare Zero Trust pointing at:
+#   http://activememoryindex:8000
+
+services:
+  activememoryindex:
+    build:
+      context: .
+    image: activememoryindex:latest
+    container_name: activememoryindex
+    env_file:
+      - .env
+    environment:
+      # Override at the shell for local testing: AMI_AUTH_SCHEME=none docker compose up -d
+      - AMI_AUTH_SCHEME=${AMI_AUTH_SCHEME:-bearer}
+      - AMI_AGENTIC_SEARCH=${AMI_AGENTIC_SEARCH:-0}
+    volumes:
+      # SQLite database + any persistent state.
+      - ami-data:/data
+    networks:
+      - default
+      - edge
+    ports:
+      # Loopback only: cloudflared reaches this via container name on the edge
+      # network. 127.0.0.1 binding keeps the Add/Search API off the LAN.
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+
+volumes:
+  ami-data:
+
+networks:
+  default:
+  edge:
+    external: true
+    name: vip-gateway_default

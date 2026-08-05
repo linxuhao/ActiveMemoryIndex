@@ -141,3 +141,42 @@ def recall_question(query: str, options: list[str] | None) -> str | None:
     if not raw:
         return None
     return raw.splitlines()[0].strip(' "')
+
+
+REFLECT_SYSTEM = """You check whether retrieved memories contain enough evidence to answer a question.
+
+Given the question and what was found, decide if anything important is still missing. You are looking
+for gaps — not evaluating whether the answer is correct.
+
+What to look for:
+1. Missing time references (dates, sequences, "when" information)
+2. Missing named entities (people, places, items mentioned in the question or options)
+3. Missing personal details (preferences, plans, opinions that would answer the question)
+
+If the evidence looks complete enough to answer, return {"status": "COMPLETE"}.
+If evidence is clearly missing, return {"status": "INCOMPLETE", "question": "..."} where the question
+is ONE targeted recall question in the user's own first-person voice that would find the missing piece.
+
+Return JSON only."""
+
+
+def reflect_gap(query: str, options: list[str] | None, top_memories: list[str]) -> dict | None:
+    """Check whether retrieved evidence is complete; if not, produce a targeted
+    follow-up recall question.  Returns None on failure (degrade gracefully)."""
+    if not config.llm_available():
+        return None
+    snippets = "\n".join(f"- {m[:200]}" for m in top_memories[:15])
+    user = f"Original question: {query}\n"
+    if options:
+        user += f"Answer options: {' | '.join(str(o) for o in options[:10])}\n"
+    user += f"\nRetrieved evidence:\n{snippets}"
+    raw = _complete(REFLECT_SYSTEM, user, 200)
+    if not raw:
+        return None
+    try:
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        pass
+    return None

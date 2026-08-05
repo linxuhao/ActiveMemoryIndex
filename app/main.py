@@ -101,13 +101,19 @@ def chunk_prefix(request: AddRequest) -> str:
     return ""
 
 
-def rank(index: store.UserIndex, query: str, options: list[str] | None) -> np.ndarray:
-    """Fuse the original query with the user-voice recall question."""
-    question = llm.recall_question(query, options) if config.llm_available() else None
-    texts = [query] + ([question] if question else [])
+def rank(index: store.UserIndex, query: str, options: list[str] | None,
+         recall_question: str | None = None) -> np.ndarray:
+    """Fuse the original query with a user-voice recall question.
+
+    When *recall_question* is given it is used directly; otherwise one is
+    generated from *query* and *options*.
+    """
+    if recall_question is None:
+        recall_question = llm.recall_question(query, options) if config.llm_available() else None
+    texts = [query] + ([recall_question] if recall_question else [])
     vectors = embed.encode(texts, is_query=True)
     scores = index.matrix @ vectors[0]
-    if question:
+    if recall_question:
         weight = config.RECALL_WEIGHT
         scores = (1.0 - weight) * scores + weight * (index.matrix @ vectors[1])
     return scores
@@ -139,12 +145,13 @@ def startup() -> None:
     store.init()
     embed.warm_up()
     log.info(
-        "ready: embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f",
+        "ready: embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s",
         config.EMBED_MODEL,
         config.LLM_MODEL if config.llm_available() else "disabled",
         "key set" if config.llm_available() else "no key — raw-text fallback",
         config.RETURN_LIMIT,
         config.RECALL_WEIGHT,
+        "on" if config.AGENTIC_SEARCH else "off",
     )
 
 
@@ -202,7 +209,30 @@ def search(
     if index.matrix is None or not index.items:
         return {"data": []}
 
-    scores = rank(index, request.query, request.options)
+    # Round 1: standard fused retrieval
+    scores1 = rank(index, request.query, request.options)
+    chosen1 = select(index, scores1, request.top_k)
+
+    # Agentic round: reflect → maybe a second retrieval
+    if config.AGENTIC_SEARCH and config.llm_available():
+        top_contents = [item.content for item, _ in chosen1[:15]]
+        reflection = llm.reflect_gap(request.query, request.options, top_contents)
+        if reflection and reflection.get("status") == "INCOMPLETE":
+            ref_question = reflection.get("question", "")
+            if ref_question:
+                scores2 = rank(index, request.query, request.options,
+                               recall_question=ref_question)
+                chosen2 = select(index, scores2, request.top_k)
+                # Merge: combine, deduplicate by content key, keep best score
+                merged: dict[str, tuple[store.Item, float]] = {}
+                for item, score in chosen1 + chosen2:
+                    key = " ".join(item.content.lower().split())[:120]
+                    if key not in merged or score > merged[key][1]:
+                        merged[key] = (item, score)
+                # Re-sort and re-select under the budget
+                merged_sorted = sorted(merged.values(), key=lambda x: -x[1])
+                chosen1 = merged_sorted[: config.RETURN_LIMIT]
+
     data = [
         {
             "id": item.id,
@@ -210,6 +240,6 @@ def search(
             "score": score,
             **({"created_at": item.created_at} if item.created_at else {}),
         }
-        for item, score in select(index, scores, request.top_k)
+        for item, score in chosen1
     ]
     return {"data": data}

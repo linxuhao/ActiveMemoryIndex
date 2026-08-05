@@ -10,15 +10,20 @@ at retrieval time than any amount of query rewriting in the question's register.
 
 ---
 
-## Quick start (Docker)
+## Quick start (Docker, self-hosted)
 
 ```bash
 docker build -t activememoryindex .
 docker run -d --name ami -p 8000:8000 -v ami-data:/data \
   -e OPENAI_API_KEY="$OPENAI_API_KEY" \
   -e AMI_LLM_MODEL=gpt-4o-mini \
+  -e AMI_AUTH_SCHEME=bearer \
+  -e AMI_AUTH_TOKEN="$AMI_AUTH_TOKEN" \
   activememoryindex
 ```
+
+The service must be reachable at a public HTTPS URL for evaluation. Health is unauthenticated;
+Add and Search require `Authorization: Bearer <AMI_AUTH_TOKEN>`.
 
 That is the whole startup. The image bakes in the embedding weights, so the container needs no
 model download at run time.
@@ -56,8 +61,8 @@ All configuration is environment variables; **no credential is stored in this re
 | `AMI_RETURN_CHAR_BUDGET` | `12000` | character budget for one response |
 | `AMI_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | embedding model, runs locally on CPU |
 | `AMI_DB_PATH` | `/data/memory.sqlite3` | SQLite file |
-| `AMI_AUTH_SCHEME` | `none` | `none` \| `bearer` \| `token` \| `x-api-key` |
-| `AMI_AUTH_TOKEN` | *(empty)* | expected secret when a scheme is set |
+| `AMI_AUTH_SCHEME` | `bearer` | `none` \| `bearer` \| `token` \| `x-api-key`. Formal evals require auth; `none` is for local smoke only. |
+| `AMI_AUTH_TOKEN` | *(empty)* | expected secret when a scheme is set. This is the Memory System Key shared with the platform. |
 
 **Degraded mode.** With no `OPENAI_API_KEY` the service still starts and serves: it stores the raw
 timestamped turns and ranks them by the original query alone. This is a deliberate availability

@@ -29,6 +29,17 @@ OUT = HERE / "out"
 CHUNK_MESSAGES = 20
 EXCLUDED_CATEGORY = 5  # adversarial: no supporting memory exists
 
+# Auth: read from the same env vars the service uses.
+_AUTH_SCHEME = os.environ.get("AMI_AUTH_SCHEME", "none").lower()
+_AUTH_TOKEN = os.environ.get("AMI_AUTH_TOKEN", "")
+_AUTH_HEADERS: dict[str, str] = {}
+if _AUTH_SCHEME == "bearer":
+    _AUTH_HEADERS["Authorization"] = f"Bearer {_AUTH_TOKEN}"
+elif _AUTH_SCHEME == "token":
+    _AUTH_HEADERS["Authorization"] = f"Token {_AUTH_TOKEN}"
+elif _AUTH_SCHEME == "x-api-key":
+    _AUTH_HEADERS["X-API-Key"] = _AUTH_TOKEN
+
 
 # --- data --------------------------------------------------------------------
 def load_locomo() -> list[dict]:
@@ -56,9 +67,10 @@ def session_epoch_ms(conversation: dict, number: int) -> int:
 
 
 def post(url: str, payload: dict, timeout: int = 900) -> dict:
+    headers = {"Content-Type": "application/json", "User-Agent": "AMI-Bench/1.0", **_AUTH_HEADERS}
     request = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST",
+        headers=headers, method="POST",
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read())
