@@ -63,8 +63,8 @@ All configuration is environment variables; **no credential is stored in this re
 | `AMI_LLM_TIMEOUT` | `60` | seconds per provider call |
 | `AMI_LLM_MAX_TOKENS_EXTRACT` / `_QUERY` | `1200` / `200` | completion caps; raise only when developing against a reasoning model |
 | `AMI_RECALL_WEIGHT` | `0.5` | weight of the user-voice recall-question channel in the fused score |
-| `AMI_RETURN_LIMIT` | `40` | maximum memories returned (never more than `top_k`) |
-| `AMI_RETURN_CHAR_BUDGET` | `12000` | character budget for one response |
+| `AMI_RETURN_LIMIT` | `100` | maximum memories returned (never more than `top_k`) |
+| `AMI_RETURN_CHAR_BUDGET` | `400000` | character budget for one response; large enough never to truncate `AMI_RETURN_LIMIT` silently |
 | `AMI_AGENTIC_SEARCH` | `1` | after retrieval, gpt-4o-mini reflects on gaps and may fire a second recall question. Adds ~1 LLM call per search; improves recall ~1.7 pp |
 | `AMI_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | embedding model, runs locally on CPU |
 | `AMI_DB_PATH` | `/data/memory.sqlite3` | SQLite file |
@@ -117,11 +117,25 @@ fine-tuned adapter and 0.152 for a keyword from the frozen model, over the same 
 the same embedder. Genre match, not query cleverness, was the lever. This service is that finding
 implemented with compliant parts.
 
-**Why we may return fewer than `top_k`.** The contract caps the count and preserves our order; it
-does not require filling it. In the same audits, the probability that a reader applies a correctly
-retrieved fact fell monotonically with context size (0.59 at one line, 0.28 at 16 lines, 0.20 at
-125 lines). Returning a short, precise, deduplicated list is a deliberate design choice, not a
-truncation bug. `AMI_RETURN_LIMIT` exposes it.
+**Why we fill `top_k`, having expected the opposite.** The prior from our own per-fact audits was
+that long contexts dilute the reader: there, the probability that a reader applied a correctly
+retrieved fact fell monotonically with context size (0.59 at one line, 0.28 at 16, 0.20 at 125).
+That prediction is **false for this reader on this benchmark**. Sweeping the return limit over
+1, 2, 3, 5, 10, 20, 40 and 100 on LoCoMo with the platform's own answer and judge prompts, accuracy
+rises monotonically with the number of returned memories, and so does the *conditional* rate at
+which the reader applies a retrieved gold memory:
+
+| memories returned | 1 | 5 | 10 | 20 | 40 | 100 |
+|---|---|---|---|---|---|---|
+| accuracy (n=529) | .214 | .361 | .433 | .488 | .552 | **.597** |
+| accuracy given gold retrieved | .447 | .510 | .556 | .580 | .605 | **.626** |
+
+Returning 100 wins every pairwise comparison on both tuning subsets, and the choice was then
+confirmed on a held-out subset never used for tuning (n=464, accuracy .584). The earlier audits
+used a 9B reader; `gpt-4o-mini` evidently uses extra context rather than drowning in it. The knob
+stays exposed because the right value is a property of the reader, not of the memory system —
+`AMI_RETURN_CHAR_BUDGET` must be raised alongside it, or the character budget silently truncates
+the list. Method in `bench/`.
 
 ## Repository layout
 

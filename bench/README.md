@@ -33,6 +33,12 @@ python bench/run_bench.py report   --tag base
   large differences between configurations should be trusted — the ordering of configurations,
   not their absolute scores.
 * LoCoMo category 5 (adversarial, no supporting memory) is excluded from both layers.
+* **Credit is asymmetric between the two stored kinds, in favour of extracted facts.** A verbatim
+  turn counts as a hit only when it *is* the evidence turn; an extracted fact counts when the
+  evidence turn is anywhere in the chunk it was extracted from (a fact's provenance is its whole
+  chunk, up to 20 messages). So the facts channel is scored more generously than the verbatim
+  channel, and the per-kind breakdown in `report` must be read with that in mind — treat the facts
+  row as an upper bound. The end-to-end layer has no such asymmetry: the judge sees the answer.
 * How the platform conveys speaker identity for two-speaker conversations is not documented; this
   harness maps speaker A to `user` and speaker B to `assistant` under one `user_id`, which is the
   literal reading of the contract.

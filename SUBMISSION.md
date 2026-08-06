@@ -137,11 +137,16 @@ the memory text itself.
    and checks whether evidence is complete. If important details are missing (entities, time
    references, personal details), it generates a second targeted recall question. Results
    from both rounds are merged, deduplicated by content, and re-ranked.
-4. **Return policy:** The ranked list is deduplicated and truncated to at most
-   `AMI_RETURN_LIMIT` (40) memories under a character budget (12,000). We deliberately return
-   fewer than `top_k` when the evidence is concentrated — the underlying paper measured a
-   monotonic context-dilution curve (reader accuracy drops from 0.59 at 1 line to 0.20 at
-   125 lines), so a short, precise list is a design choice, not a truncation bug.
+4. **Return policy:** The ranked list is deduplicated and returned up to `AMI_RETURN_LIMIT`
+   (100) memories, never exceeding `top_k`, under a character budget (400,000) set large enough
+   never to truncate that list silently. This value is **measured, not assumed**. The underlying
+   paper reported a monotonic context-dilution curve on a 9B reader (accuracy 0.59 at 1 line →
+   0.20 at 125), which predicts a short return set; we swept the limit over 1/2/3/5/10/20/40/100
+   on LoCoMo using the platform's own answer and judge prompts and found the **opposite** for
+   `gpt-4o-mini` — accuracy rises monotonically (0.214 at 1 → 0.597 at 100, n=529), as does the
+   conditional rate at which the reader applies a retrieved gold memory (0.447 → 0.626).
+   Returning 100 won every pairwise comparison on both tuning subsets and was then confirmed on a
+   held-out subset never used for tuning (n=464, accuracy 0.584). Details and method in `bench/`.
 
 Search returns memory evidence only. It never produces or disguises a final answer, and never
 reads outside the requested `user_id`.
@@ -153,7 +158,7 @@ reads outside the requested `user_id`.
 | Dual store (verbatim + facts) | Facts are clean retrieval keys; verbatim preserves details extraction drops |
 | Register-matching recall | First-person "Did I tell you…" queries match the store's genre; empirically beats keyword-based retrieval |
 | Agentic reflection | One extra LLM call catches missing entities/time refs the first pass overlooked |
-| Return fewer than `top_k` | Context dilution curve: longer contexts → lower reader accuracy |
+| Fill `top_k` (100) | Swept 1→100 against the platform's own answer/judge prompts: accuracy is monotone increasing for `gpt-4o-mini`, reversing the paper's 9B dilution prior; confirmed on a held-out subset |
 | Timestamps in content text | The platform answer model resolves relative time from content, not `created_at` |
 
 ## 全部方法改动 · All Method Changes from the Original Paper
@@ -169,7 +174,7 @@ What was **adapted** from the paper for this submission:
 | Paper finding | How it's used here |
 |---|---|
 | Register-matching beats query rewriting | The recall-question channel: ask "Did I tell you about X?" in first person, fuse with original query |
-| Context-dilution curve (0.59 → 0.20) | `AMI_RETURN_LIMIT=40` and character budget enforce short, precise return sets |
+| Context-dilution curve (0.59 → 0.20) | **Tested and not reproduced on `gpt-4o-mini`.** The paper's 9B reader loses accuracy as context grows; this reader gains it. We therefore return the full `top_k` (100) rather than the short set the paper's curve implies — the reversal is reported here rather than hidden because it is a property of the reader, not of the memory system |
 | Verbose storage is safe with good retrieval | The dual-store: keep everything (verbatim) + index clean keys (facts) |
 
 What is **new** in this submission (not in the paper):

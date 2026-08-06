@@ -34,8 +34,11 @@ are from that work. A stronger LoRA-based configuration in that paper is deliber
 - **Add must be synchronous** — 200 only after persistence is searchable.
 - **API contract:** `/add`, `/search`, `/health`. Full contract in `README.md` and `scripts/smoke_contract.py`.
 - **Auth:** `none` by default; supports `bearer`/`token`/`x-api-key` via `AMI_AUTH_SCHEME`.
-- **Evaluation `top_k` is 100.** `AMI_RETURN_LIMIT` (default 40) may return fewer — this is intentional
-  (context dilution curve from the underlying paper), not a truncation bug.
+- **Evaluation `top_k` is 100.** `AMI_RETURN_LIMIT` (default 100) fills it. The paper's dilution
+  prior predicted a short return set; sweeping 1→100 against the platform's own answer/judge
+  prompts showed accuracy is monotone *increasing* for `gpt-4o-mini` (.214@1 → .597@100, n=529;
+  held-out confirmation .584, n=464). `AMI_RETURN_CHAR_BUDGET` must stay large enough not to
+  truncate the list silently.
 - **No benchmark data or gold answers are bundled or consulted** in this repository.
 - **Data retention:** eval data is used only to serve the run; not retained for training or analysis.
 
@@ -167,7 +170,8 @@ All via environment variables. No credentials in the repository. See `.env.examp
 | `AMI_LLM_MODEL` | `gpt-4o-mini` | competition-required model |
 | `AMI_LLM_DISABLE_THINKING` | `0` | set to `1` for local Qwen reasoning models via gateway; injects `<<DISABLE_THINKING>>` into system prompt |
 | `AMI_RECALL_WEIGHT` | `0.5` | weight of user-voice recall channel in fused score |
-| `AMI_RETURN_LIMIT` | `40` | max memories returned (≤ top_k) |
+| `AMI_RETURN_LIMIT` | `100` | max memories returned (≤ top_k); measured optimum, see above |
+| `AMI_RETURN_CHAR_BUDGET` | `400000` | response character budget; must not truncate the limit |
 | `AMI_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | local embedding model |
 
 ## Notes

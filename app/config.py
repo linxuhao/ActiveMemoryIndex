@@ -53,8 +53,8 @@ DISABLE_THINKING = os.environ.get("AMI_LLM_DISABLE_THINKING", "0") != "0"
 RECALL_WEIGHT = _float("AMI_RECALL_WEIGHT", 0.5)
 # We may return fewer than top_k (the contract only caps the count). Long
 # contexts dilute the fixed answer model, so the returned set is bounded.
-RETURN_LIMIT = _int("AMI_RETURN_LIMIT", 40)
-RETURN_CHAR_BUDGET = _int("AMI_RETURN_CHAR_BUDGET", 12000)
+RETURN_LIMIT = _int("AMI_RETURN_LIMIT", 100)
+RETURN_CHAR_BUDGET = _int("AMI_RETURN_CHAR_BUDGET", 400000)
 # Agentic search: after the first retrieval, gpt-4o-mini checks whether the
 # evidence is complete and may fire a second targeted recall question. Each
 # round costs one extra LLM call + one extra embed pass.
