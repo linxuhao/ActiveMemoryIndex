@@ -20,13 +20,20 @@ cp .env.example .env
 # Edit .env: set OPENAI_API_KEY and AMI_AUTH_TOKEN (everything else has sensible defaults)
 docker compose up -d
 
-# Or standalone docker run (equivalent to the compose path):
+# Or standalone docker run. This path does NOT read .env — pass the file
+# explicitly, or export the variables first:
 docker build -t activememoryindex .
 docker run -d --name ami -p 127.0.0.1:8000:8000 -v ami-data:/data \
-  -e OPENAI_API_KEY="$OPENAI_API_KEY" \
-  -e AMI_AUTH_SCHEME=bearer \
-  -e AMI_AUTH_TOKEN="$AMI_AUTH_TOKEN" \
+  --env-file .env \
   activememoryindex
+```
+
+Check that it actually came up — `docker compose up -d` exits 0 even when the
+container then refuses to start:
+
+```bash
+docker compose ps
+docker compose logs --tail 20
 ```
 
 The first build downloads PyTorch and the embedding weights: about 1 minute on a
@@ -56,8 +63,33 @@ python3 scripts/smoke_contract.py http://127.0.0.1:8000
 ```
 
 It reads `.env` for the auth scheme and token, so it works against an
-authenticated instance without extra flags. It needs **no** OpenAI key: the full
-suite passes in degraded mode, which is the cheapest way to verify a checkout.
+authenticated instance without extra flags. Run from elsewhere, or against a
+remote deployment, pass the secret in the environment:
+
+```bash
+AMI_AUTH_TOKEN=<your token> python3 scripts/smoke_contract.py https://your-host
+```
+
+It needs **no** OpenAI key: the full suite passes in degraded mode, which is the
+cheapest way to verify a checkout.
+
+**Publishing.** Both startup paths bind loopback. To expose the service, either
+set `AMI_BIND=0.0.0.0` and put HTTPS in front of it, or route it through an
+existing tunnel/proxy on a shared Docker network with the optional override:
+
+```bash
+AMI_EDGE_NETWORK=<your proxy's network> \
+  docker compose -f docker-compose.yml -f docker-compose.edge.yml up -d
+```
+
+**Cost.** Each Add chunk costs one `gpt-4o-mini` call (up to ~1200 completion
+tokens), and each Search one more; `AMI_AGENTIC_SEARCH=1` adds a second Search
+call. Retrieval itself — embedding and ranking — is local and free, and degraded
+mode costs nothing at all.
+
+**Unauthenticated surface:** `/health` (liveness only; store counts and LLM
+counters require the same secret as Search) and FastAPI's generated `/docs`,
+`/redoc` and `/openapi.json`, which describe the same contract this README does.
 
 The script checks synchronous persistence, exact `request_id`/`user_id`/`session_id` echo,
 response shape, `top_k` bound, `user_id` isolation, idempotent re-adds, and 422 on malformed
@@ -83,6 +115,14 @@ All configuration is environment variables; **no credential is stored in this re
 | `AMI_DB_PATH` | `/data/memory.sqlite3` | SQLite file |
 | `AMI_AUTH_SCHEME` | `bearer` | `none` \| `bearer` \| `token` \| `x-api-key`. Any of the three schemes carrying the right secret is accepted. The service **refuses to start** if a scheme is set and `AMI_AUTH_TOKEN` is empty or a placeholder — use `none` deliberately for local testing. |
 | `AMI_AUTH_TOKEN` | *(empty)* | expected secret when a scheme is set. This is the Memory System Key shared with the platform. |
+| `AMI_BIND` / `AMI_PORT` | `127.0.0.1` / `8000` | host interface and port (compose). Publish deliberately. |
+| `AMI_CONTAINER` / `AMI_IMAGE` / `AMI_VOLUME` | `activememoryindex` / `activememoryindex:latest` / `ami-data` | names used by compose; override all three to run a second copy on one host |
+| `AMI_EDGE_NETWORK` | `vip-gateway_default` | external Docker network for the optional tunnel override — site-specific |
+| `AMI_LLM_RETRIES` | `1` | retries per provider call |
+| `AMI_LLM_MAX_FACTS` | `24` | cap on extracted facts per Add chunk (a cap, not a target) |
+| `AMI_EMBED_DEVICE` / `AMI_EMBED_BATCH` | `cpu` / `64` | embedding device and batch size |
+| `AMI_EXTRACT` / `AMI_RECALL_QUERY` | `1` / `1` | set either to `0` to disable that LLM channel |
+| `AMI_LLM_DISABLE_THINKING` | `0` | development only: suppress reasoning output from a local reasoning model |
 
 **Degraded mode.** With no `OPENAI_API_KEY` the service still starts and serves: it stores the raw
 timestamped turns and ranks them by the original query alone. This is a deliberate availability
@@ -171,7 +211,9 @@ app/main.py      FastAPI service: /add, /search, /health
 app/llm.py       the single LLM (gpt-4o-mini): fact extraction + recall-question rewriting
 app/embed.py     bge-small-en-v1.5 embeddings
 app/store.py     SQLite store with a per-user in-process vector cache
-scripts/         contract smoke test
+scripts/         contract smoke test, prompt calibration
+tests/           write-path guards and write-path concurrency (plain scripts, not pytest)
+bench/           offline LoCoMo harness used to set the retrieval knobs; not in the image
 ```
 
 ## Disclosure of original work and changes

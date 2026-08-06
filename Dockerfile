@@ -21,7 +21,8 @@ ENV HF_HUB_OFFLINE=1
 COPY app ./app
 COPY scripts ./scripts
 
-VOLUME ["/data"]
+# No VOLUME directive: compose and `docker run -v` both supply /data, and a
+# VOLUME here would litter an anonymous volume for every container run.
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s \

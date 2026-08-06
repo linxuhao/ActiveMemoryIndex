@@ -165,8 +165,15 @@ def startup() -> None:
         raise RuntimeError(problem)
     store.init()
     embed.warm_up()
+    if config.AUTH_SCHEME == "none":
+        log.warning("auth is DISABLED (AMI_AUTH_SCHEME=none): anyone who can reach this "
+                    "service can read and write any user_id")
+    elif config.AUTH_SCHEME not in {"bearer", "token", "x-api-key"}:
+        log.warning("AMI_AUTH_SCHEME=%r is not a documented scheme; a secret is still "
+                    "required, but check your configuration", config.AUTH_SCHEME)
     log.info(
-        "ready: embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s",
+        "ready: auth=%s embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s",
+        config.AUTH_SCHEME,
         config.EMBED_MODEL,
         config.LLM_MODEL if config.llm_available() else "disabled",
         "key set" if config.llm_available() else "no key — raw-text fallback",
@@ -177,7 +184,17 @@ def startup() -> None:
 
 
 @app.get("/health")
-def health() -> dict:
+def health(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None),
+) -> dict:
+    # Liveness is unauthenticated by contract ("any 2xx means healthy"), but the
+    # store's size is not liveness — it tells an anonymous caller how much
+    # evaluation data we hold. Details require the same secret as Search.
+    try:
+        check_auth(authorization, x_api_key)
+    except HTTPException:
+        return {"status": "ok"}
     counters = dict(llm.counters)
     calls, failures = counters["calls"], counters["failures"]
     # "llm: true" only says a key is configured. A key that 401s on every call

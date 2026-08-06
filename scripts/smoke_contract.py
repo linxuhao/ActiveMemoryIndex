@@ -39,9 +39,12 @@ def _load_dotenv() -> None:
 
 _load_dotenv()
 
-# Auth: read from the same env vars the service uses so we can smoke-test
-# a protected deployment without dropping auth to "none".
-_AUTH_SCHEME = os.environ.get("AMI_AUTH_SCHEME", "none").lower()
+# Auth: read the same env vars the service uses, with the SAME default it uses
+# (bearer). Defaulting to "none" here while the service defaults to "bearer"
+# made this script report a wall of 401-driven failures against a perfectly
+# healthy deployment — the worst possible first impression for a reviewer.
+# A bare token with no scheme also works: `AMI_AUTH_TOKEN=... python3 ...`.
+_AUTH_SCHEME = os.environ.get("AMI_AUTH_SCHEME", "bearer").lower()
 _AUTH_TOKEN = os.environ.get("AMI_AUTH_TOKEN", "")
 _AUTH_HEADER: dict[str, str] = {}
 if _AUTH_SCHEME == "bearer":
@@ -82,6 +85,26 @@ QUERIES = [
 failures: list[str] = []
 
 
+_warned_401 = False
+
+
+def note_401() -> None:
+    """Explain a 401 once, instead of letting it masquerade as a broken service."""
+    global _warned_401
+    if _warned_401:
+        return
+    _warned_401 = True
+    if _AUTH_TOKEN:
+        print("\n  !! 401 with a token configured — the secret does not match the server's\n"
+              f"     AMI_AUTH_TOKEN (scheme {_AUTH_SCHEME!r}). The service is probably fine.\n")
+    else:
+        print("\n  !! 401 and NO credentials are configured. This script found no .env and no\n"
+              "     AMI_AUTH_TOKEN in the environment, so it sent no Authorization header.\n"
+              "     The service is probably fine — you are unauthenticated. Retry with:\n"
+              "       AMI_AUTH_TOKEN=<your token> python3 scripts/smoke_contract.py <url>\n"
+              "     (or AMI_AUTH_SCHEME=none if the service runs without auth)\n")
+
+
 def check(condition: bool, label: str) -> None:
     print(("  PASS  " if condition else "  FAIL  ") + label)
     if not condition:
@@ -120,6 +143,8 @@ for request_id, messages in SESSIONS:
         "session_id": SESSION,
     }
     status, body = call("/add", payload)
+    if status == 401:
+        note_401()
     check(status == 200, f"POST /add {request_id} returns 200 (got {status})")
     check(body.get("success") is True, f"{request_id}: success is boolean true")
     check(body.get("request_id") == request_id, f"{request_id}: request_id echoed exactly")

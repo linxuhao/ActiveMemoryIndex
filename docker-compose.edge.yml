@@ -1,14 +1,19 @@
 # Optional override: publish the service through an existing Cloudflare tunnel
-# instead of binding a host port.
+# (or any reverse proxy on a shared Docker network) instead of exposing a host
+# port directly.
 #
 #   docker compose -f docker-compose.yml -f docker-compose.edge.yml up -d
 #
-# The tunnel's connector must already run on the `edge` network below, and its
-# ingress rule should point at http://activememoryindex:8000.
+# The network name below is SITE-SPECIFIC: set AMI_EDGE_NETWORK to whatever
+# network your tunnel connector already runs on. The connector's ingress rule
+# should point at http://<AMI_CONTAINER>:8000 (default: activememoryindex).
+#
+# With this override the host port stays on loopback by default, because the
+# tunnel reaches the container over the shared network, not through the host.
 services:
   activememoryindex:
     ports: !override
-      - "127.0.0.1:8000:8000"
+      - "${AMI_BIND:-127.0.0.1}:${AMI_PORT:-8000}:8000"
     networks:
       - default
       - edge
@@ -16,4 +21,4 @@ services:
 networks:
   edge:
     external: true
-    name: vip-gateway_default
+    name: ${AMI_EDGE_NETWORK:-vip-gateway_default}

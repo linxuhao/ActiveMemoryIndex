@@ -81,9 +81,9 @@ AGENTIC_SEARCH = _env("AMI_AGENTIC_SEARCH", "0") != "0"
 
 # --- auth (the platform smoke path uses none) --------------------------------
 # Fail closed. A memory service reachable from the internet with auth off by
-# default is the worst available default, and the `docker run` path in the
-# README does not pass a scheme. Set AMI_AUTH_SCHEME=none deliberately for
-# local testing.
+# default is the worst available default, and a launch path that forgets to set
+# a scheme must not silently open the service. Set AMI_AUTH_SCHEME=none
+# deliberately for local testing.
 AUTH_SCHEME = _env("AMI_AUTH_SCHEME", "bearer").lower()  # none|bearer|token|x-api-key
 AUTH_TOKEN = _env("AMI_AUTH_TOKEN", "")
 PLACEHOLDER_TOKENS = {"", "change-me", "changeme", "your-token-here"}
@@ -96,7 +96,7 @@ def auth_misconfigured() -> str | None:
     if AUTH_TOKEN in PLACEHOLDER_TOKENS:
         return (
             f"AMI_AUTH_SCHEME={AUTH_SCHEME} requires a real AMI_AUTH_TOKEN; got "
-            f"{'an empty value' if not AUTH_TOKEN else 'the placeholder from .env.example'}. "
+            f"{'an empty value' if not AUTH_TOKEN else 'a known placeholder value'}. "
             "Generate one with: python3 -c \"import secrets; print(secrets.token_hex(32))\" "
             "— or set AMI_AUTH_SCHEME=none for local testing."
         )
