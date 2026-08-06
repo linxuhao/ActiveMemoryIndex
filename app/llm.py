@@ -20,7 +20,7 @@ _lock = threading.Lock()
 # The platform drives Add with up to 64 workers; cap our own fan-out at the
 # provider so a burst degrades into queueing rather than into 429s.
 _gate = threading.Semaphore(config.LLM_CONCURRENCY)
-counters = {"calls": 0, "failures": 0}
+counters = {"calls": 0, "failures": 0, "empty_extractions": 0}
 
 EXTRACT_SYSTEM = """You turn a chunk of a conversation into atomic memories for a personal memory index.
 
@@ -127,7 +127,14 @@ def extract_facts(chunk_text: str) -> list[str]:
     raw = _complete(EXTRACT_SYSTEM % config.LLM_MAX_FACTS, chunk_text, config.LLM_MAX_TOKENS_EXTRACT)
     if raw is None:
         return []
-    return _parse_facts(raw)[: config.LLM_MAX_FACTS]
+    facts = _parse_facts(raw)[: config.LLM_MAX_FACTS]
+    if raw and not facts:
+        # The call succeeded but nothing parsed — usually a reply truncated by
+        # the token cap. Without this the whole fact channel for the chunk
+        # vanishes with no counter, no log line, and a 200 response.
+        counters["empty_extractions"] += 1
+        log.warning("extraction returned no usable facts from a %d-char reply", len(raw))
+    return facts
 
 
 def recall_question(query: str, options: list[str] | None) -> str | None:

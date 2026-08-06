@@ -5,7 +5,7 @@ Paste-ready materials for the evaluation access request. Keep in sync with `READ
 | field | value |
 |---|---|
 | System name | ActiveMemoryIndex |
-| Version | 1.0.0 (commit `dce1670` pinned at submission) |
+| Version | 1.0.0 (commit pinned at submission — see the repository's latest `main`; update this line to the exact SHA when the access request is filed) |
 | Evaluation type | Textual Memory |
 | Division / route | Academic Methods · API (self-hosted) |
 | Repository | https://github.com/linxuhao/ActiveMemoryIndex |
@@ -102,7 +102,7 @@ Add  ──→  verbatim store (timestamped turns)
 
 Search ──→  recall-question rewrite ("Did I tell you about …?")
          │  + fused embedding retrieval (original query + recall question)
-         │  + agentic gap-check (gpt-4o-mini reflects, may fire second query)
+         │  + optional agentic gap-check (off by default; see method changes)
          │  + deduplicate, trim under character budget
          └──→  evidence only, never an answer
 ```
@@ -133,10 +133,10 @@ the memory text itself.
    question's register.
 2. **Fused retrieval:** Both the original query and the recall question are embedded. Every
    memory is scored by `(1-w)·sim(query) + w·sim(recall question)` where `w=0.5`.
-3. **Agentic gap-check:** After the first retrieval, `gpt-4o-mini` inspects the top results
-   and checks whether evidence is complete. If important details are missing (entities, time
-   references, personal details), it generates a second targeted recall question. Results
-   from both rounds are merged, deduplicated by content, and re-ranked.
+3. **Agentic gap-check (available, off by default):** `gpt-4o-mini` can inspect the first
+   retrieval and, if evidence looks incomplete, generate a second targeted recall question,
+   merging and re-ranking both rounds. Disabled (`AMI_AGENTIC_SEARCH=0`) because it measured
+   zero end-to-end gain at the deployed return size while costing an extra call per search.
 4. **Return policy:** The ranked list is deduplicated and returned up to `AMI_RETURN_LIMIT`
    (100) memories, never exceeding `top_k`, under a character budget (400,000) set large enough
    never to truncate that list silently. This value is **measured, not assumed**. The underlying
@@ -157,7 +157,7 @@ reads outside the requested `user_id`.
 |---|---|
 | Dual store (verbatim + facts) | Facts are clean retrieval keys; verbatim preserves details extraction drops |
 | Register-matching recall | First-person "Did I tell you…" queries match the store's genre; empirically beats keyword-based retrieval |
-| Agentic reflection | One extra LLM call catches missing entities/time refs the first pass overlooked |
+| Agentic reflection, off by default | Measured at zero end-to-end gain once the full `top_k` is returned; kept in the code behind `AMI_AGENTIC_SEARCH` |
 | Fill `top_k` (100) | Swept 1→100 against the platform's own answer/judge prompts: accuracy is monotone increasing for `gpt-4o-mini`, reversing the paper's 9B dilution prior; confirmed on a held-out subset |
 | Timestamps in content text | The platform answer model resolves relative time from content, not `created_at` |
 
@@ -185,14 +185,21 @@ What is **new** in this submission (not in the paper):
 2. **Fact extraction prompt** — The extraction pipeline (24 atomic first-person facts per
    chunk, timestamp prefixing, no-inference constraint) was written specifically for this
    submission to work with `gpt-4o-mini` on the LoCoMo dataset.
-3. **Agentic search (gap-check + second retrieval)** — After the first retrieval,
-   `gpt-4o-mini` inspects the top results and may fire a second targeted recall question if
-   evidence is incomplete. Results are merged and deduplicated. This adds ~1 LLM call per
-   search and improves recall by ~1.7 percentage points on LoCoMo.
+3. **Agentic search (gap-check + second retrieval), implemented but DISABLED by default** —
+   `gpt-4o-mini` can inspect the first retrieval and fire a second targeted recall question.
+   We measured it and turned it off: on the one clean A/B (same store, same weight, conv 2-4,
+   n=529) it moved retrieval recall@10 from 0.711 to 0.741 but left end-to-end accuracy
+   unchanged at 0.599 — the gain lives at small return sizes, and we return the full `top_k`.
+   It costs one extra LLM call per search, so it is off (`AMI_AGENTIC_SEARCH=0`). An earlier
+   draft of this document claimed "+1.7 percentage points"; that figure came from an ablation
+   whose two arms were later found to be byte-identical, and it is retracted.
 4. **Fused embedding scoring** — Weighted combination of original query and recall-question
    similarity, with tunable weight `AMI_RECALL_WEIGHT`, calibrated on LoCoMo.
-5. **Character-budget return policy** — The paper's context-dilution finding is
-   operationalized as a concrete character budget (12,000 chars) with deduplication.
+5. **Return policy — the paper's context-dilution finding tested and NOT reproduced.**
+   The ranked list is deduplicated and returned up to `AMI_RETURN_LIMIT` (100, i.e. the full
+   `top_k`) under a 400,000-character budget sized never to truncate it. The paper predicted a
+   short return set; on `gpt-4o-mini` accuracy rises monotonically with the returned count
+   (see the read-path section above).
 6. **Production service wrapper** — FastAPI, bearer auth, Docker deployment, Cloudflare
    tunnel, idempotent re-add, degraded mode without API key. None of this infrastructure
    exists in the research codebase.

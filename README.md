@@ -65,7 +65,7 @@ All configuration is environment variables; **no credential is stored in this re
 | `AMI_RECALL_WEIGHT` | `0.5` | weight of the user-voice recall-question channel in the fused score |
 | `AMI_RETURN_LIMIT` | `100` | maximum memories returned (never more than `top_k`) |
 | `AMI_RETURN_CHAR_BUDGET` | `400000` | character budget for one response; large enough never to truncate `AMI_RETURN_LIMIT` silently |
-| `AMI_AGENTIC_SEARCH` | `1` | after retrieval, gpt-4o-mini reflects on gaps and may fire a second recall question. Adds ~1 LLM call per search; improves recall ~1.7 pp |
+| `AMI_AGENTIC_SEARCH` | `0` | after retrieval, gpt-4o-mini reflects on gaps and may fire a second recall question. Off by default — measured at zero end-to-end gain when the full `top_k` is returned, at the cost of one extra LLM call per search |
 | `AMI_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | embedding model, runs locally on CPU |
 | `AMI_DB_PATH` | `/data/memory.sqlite3` | SQLite file |
 | `AMI_AUTH_SCHEME` | `bearer` | `none` \| `bearer` \| `token` \| `x-api-key`. Formal evals require auth; `none` is for local smoke only. |
@@ -103,9 +103,9 @@ expressions from the memory text itself.
    the fused similarity `(1-w)·sim(query) + w·sim(recall question)`.
 3. The ranked list is deduplicated and truncated to at most `AMI_RETURN_LIMIT` memories, always
    within `top_k`, under a character budget.
-4. When `AMI_AGENTIC_SEARCH=1` (the default), `gpt-4o-mini` inspects the top results and may fire
-   a second targeted recall question if evidence is missing; results from both rounds are merged
-   and deduplicated.
+4. Optionally (`AMI_AGENTIC_SEARCH=1`, **off by default**), `gpt-4o-mini` inspects the top results
+   and may fire a second targeted recall question if evidence is missing; results from both rounds
+   are merged and deduplicated. See "Why the agentic round is off" below.
 
 Search returns memory evidence only. It never produces or disguises a final answer, and never
 reads outside the requested `user_id`.
@@ -162,8 +162,16 @@ scripts/         contract smoke test
   prompts, the dual store, the fused ranking, and the return policy. This code was written for this
   submission and is not a fork of another repository.
 * **Third-party components used as-is:** `BAAI/bge-small-en-v1.5` (embeddings, MIT), FastAPI,
-  uvicorn, sentence-transformers, SQLite, and the OpenAI Python SDK. No benchmark data, gold
-  answer, or evaluation artefact is bundled or consulted.
+  uvicorn, sentence-transformers, SQLite, and the OpenAI Python SDK. The offline harness in
+  `bench/` additionally downloads two public repositories at run time — LoCoMo
+  (<https://github.com/snap-research/locomo>, `locomo10.json`) for conversations and gold
+  answers, and the platform's own public evaluation code
+  (<https://github.com/AML-memory/agent-memory-leaderboard>) whose answer and judge prompts it
+  imports verbatim. Neither is vendored into this repository or into the image.
+* **The service never sees benchmark data.** No dataset, gold answer, or evaluation artefact is
+  bundled in the image or consulted by `/add` or `/search`. `bench/` does read gold answers, but
+  it runs offline, on the author's machine, against public data, and is not part of the
+  deployed service (the Dockerfile copies only `app/` and `scripts/`).
 * **Deliberately excluded:** the strongest configuration in the paper above writes each memory into
   a LoRA adapter on a local 9B model and elicits the recall statement from those weights. That
   variant is **not** submitted and **not** implemented here, because the challenge requires the

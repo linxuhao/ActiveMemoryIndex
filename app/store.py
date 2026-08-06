@@ -34,8 +34,9 @@ CREATE TABLE IF NOT EXISTS items (
 );
 CREATE INDEX IF NOT EXISTS idx_items_user ON items(user_id);
 CREATE TABLE IF NOT EXISTS requests (
-    request_id TEXT PRIMARY KEY,
-    user_id    TEXT NOT NULL
+    request_id TEXT NOT NULL,
+    user_id    TEXT NOT NULL,
+    PRIMARY KEY (request_id, user_id)
 );
 """
 
@@ -73,14 +74,41 @@ def init() -> None:
         _conn.commit()
 
 
-def item_id(request_id: str, kind: str, index: int) -> str:
-    digest = hashlib.sha1(request_id.encode("utf-8")).hexdigest()[:16]
+def item_id(request_id: str, kind: str, index: int, user_id: str = "") -> str:
+    # user_id is part of the digest: the contract does not promise globally
+    # unique request_ids, and an unsalted id would let one user's Add replace
+    # another user's row through INSERT OR REPLACE.
+    digest = hashlib.sha1(f"{user_id}\x00{request_id}".encode("utf-8")).hexdigest()[:16]
     return f"{digest}-{kind[0]}{index}"
 
 
-def request_seen(request_id: str) -> bool:
+_gates: dict[tuple[str, str], threading.Lock] = {}
+_gates_guard = threading.Lock()
+
+
+def request_gate(request_id: str, user_id: str) -> threading.Lock:
+    """Serialize concurrent attempts at the same write.
+
+    The platform retries Add on 408/409/425/429/5xx, so two attempts at one
+    request_id can overlap. Without this gate both pass the duplicate check,
+    both run the LLM, and the store ends up holding a mixture of two different
+    extractions of the same chunk — with the in-process cache and SQLite
+    disagreeing about how many rows exist.
+    """
+    key = (request_id, user_id)
+    with _gates_guard:
+        gate = _gates.get(key)
+        if gate is None:
+            gate = _gates[key] = threading.Lock()
+        return gate
+
+
+def request_seen(request_id: str, user_id: str) -> bool:
     with _lock:
-        row = _conn.execute("SELECT 1 FROM requests WHERE request_id = ?", (request_id,)).fetchone()
+        row = _conn.execute(
+            "SELECT 1 FROM requests WHERE request_id = ? AND user_id = ?",
+            (request_id, user_id),
+        ).fetchone()
         return row is not None
 
 

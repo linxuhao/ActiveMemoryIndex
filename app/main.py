@@ -46,24 +46,39 @@ class SearchRequest(BaseModel):
 
 # --- helpers -----------------------------------------------------------------
 def check_auth(authorization: str | None, x_api_key: str | None) -> None:
-    scheme = config.AUTH_SCHEME
-    if scheme == "none":
+    """Accept the secret under any documented scheme.
+
+    The declared scheme is `AMI_AUTH_SCHEME`, but accepting only that one turns
+    a caller's harmless scheme or casing difference into a 100% failure rate
+    with no partial credit. Any of Bearer / Token / X-Api-Key carrying the
+    right secret is honoured; anything else is rejected.
+    """
+    if config.AUTH_SCHEME == "none":
         return
-    if scheme in {"bearer", "token"}:
-        prefix = "Bearer " if scheme == "bearer" else "Token "
-        supplied = authorization[len(prefix):] if authorization and authorization.startswith(prefix) else None
-    elif scheme == "x-api-key":
-        supplied = x_api_key
-    else:
+    supplied = []
+    if authorization:
+        parts = authorization.split(None, 1)
+        if len(parts) == 2 and parts[0].lower() in {"bearer", "token"}:
+            supplied.append(parts[1].strip())
+        else:
+            supplied.append(authorization.strip())
+    if x_api_key:
+        supplied.append(x_api_key.strip())
+    if config.AUTH_TOKEN and config.AUTH_TOKEN in supplied:
         return
-    if not supplied or supplied != config.AUTH_TOKEN:
-        raise HTTPException(status_code=401, detail={"reason": "invalid credentials"})
+    raise HTTPException(status_code=401, detail={"reason": "invalid credentials"})
 
 
 def stamp(timestamp: int | None) -> tuple[str | None, str]:
     """Return (ISO created_at, display prefix) for a Unix-millisecond timestamp."""
     if timestamp is None:
         return None, ""
+    # The contract says Unix milliseconds. A sender using seconds would
+    # otherwise silently stamp every memory 1970 — and that wrong date is
+    # embedded in the stored text and fed to the extractor.
+    if 0 < timestamp < 100_000_000_000:
+        log.warning("timestamp %s looks like seconds, not milliseconds; scaling", timestamp)
+        timestamp *= 1000
     try:
         moment = dt.datetime.fromtimestamp(timestamp / 1000, tz=dt.timezone.utc)
     except (OverflowError, OSError, ValueError):
@@ -83,7 +98,7 @@ def build_items(request: AddRequest) -> tuple[list[store.Item], str]:
         speaker = "I" if message.role == "user" else (message.role or "other").capitalize()
         items.append(
             store.Item(
-                id=store.item_id(request.request_id, "raw", position),
+                id=store.item_id(request.request_id, "raw", position, request.user_id),
                 kind="raw",
                 parent_id=None,
                 content=f"{prefix}{speaker}: {content}",
@@ -173,26 +188,29 @@ def add(
         user_id=request.user_id,
         session_id=request.session_id,
     )
-    if store.request_seen(request.request_id):
-        return echo
+    # One writer per (request_id, user_id): a retry that overlaps the original
+    # waits here and then observes the completed write, instead of racing it.
+    with store.request_gate(request.request_id, request.user_id):
+        if store.request_seen(request.request_id, request.user_id):
+            return echo
 
-    items, chunk_text = build_items(request)
-    if chunk_text:
-        prefix = chunk_prefix(request)
-        for position, fact in enumerate(llm.extract_facts(chunk_text)):
-            content = fact if fact.startswith("[") else f"{prefix}{fact}"
-            items.append(
-                store.Item(
-                    id=store.item_id(request.request_id, "fact", position),
-                    kind="fact",
-                    parent_id=None,
-                    content=content,
-                    created_at=items[0].created_at if items else None,
+        items, chunk_text = build_items(request)
+        if chunk_text:
+            prefix = chunk_prefix(request)
+            for position, fact in enumerate(llm.extract_facts(chunk_text)):
+                content = fact if fact.startswith("[") else f"{prefix}{fact}"
+                items.append(
+                    store.Item(
+                        id=store.item_id(request.request_id, "fact", position, request.user_id),
+                        kind="fact",
+                        parent_id=None,
+                        content=content,
+                        created_at=items[0].created_at if items else None,
+                    )
                 )
-            )
-    if items:
-        vectors = embed.encode([item.content for item in items])
-        store.add(request.user_id, request.session_id, request.request_id, items, vectors)
+        if items:
+            vectors = embed.encode([item.content for item in items])
+            store.add(request.user_id, request.session_id, request.request_id, items, vectors)
     return echo
 
 
@@ -229,9 +247,17 @@ def search(
                     key = " ".join(item.content.lower().split())[:120]
                     if key not in merged or score > merged[key][1]:
                         merged[key] = (item, score)
-                # Re-sort and re-select under the budget
+                # Re-sort, then re-apply BOTH caps. Slicing on RETURN_LIMIT
+                # alone let the merged set exceed top_k — a contract violation.
                 merged_sorted = sorted(merged.values(), key=lambda x: -x[1])
-                chosen1 = merged_sorted[: config.RETURN_LIMIT]
+                limit = min(request.top_k, config.RETURN_LIMIT)
+                budget = config.RETURN_CHAR_BUDGET
+                chosen1 = []
+                for item, score in merged_sorted:
+                    if len(chosen1) >= limit or budget <= 0:
+                        break
+                    budget -= len(item.content)
+                    chosen1.append((item, score))
 
     data = [
         {

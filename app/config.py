@@ -30,10 +30,16 @@ EMBED_BATCH = _int("AMI_EMBED_BATCH", 64)
 LLM_MODEL = os.environ.get("AMI_LLM_MODEL", "gpt-4o-mini")
 LLM_BASE_URL = os.environ.get("OPENAI_BASE_URL", "") or None
 LLM_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-LLM_TIMEOUT = _float("AMI_LLM_TIMEOUT", 60.0)
-LLM_RETRIES = _int("AMI_LLM_RETRIES", 2)
+# The public endpoint sits behind Cloudflare, which cuts the origin at ~100 s
+# regardless of the platform's 1200 s allowance. timeout x (retries+1) must
+# stay well under that, or the edge manufactures the retries that then race
+# each other at the same request_id.
+LLM_TIMEOUT = _float("AMI_LLM_TIMEOUT", 25.0)
+LLM_RETRIES = _int("AMI_LLM_RETRIES", 1)
 LLM_MAX_FACTS = _int("AMI_LLM_MAX_FACTS", 24)
-LLM_CONCURRENCY = _int("AMI_LLM_CONCURRENCY", 16)
+# Matches the server threadpool: a smaller gate only adds queueing on top of
+# the provider's own limits, and queueing is what pushes a request past the edge.
+LLM_CONCURRENCY = _int("AMI_LLM_CONCURRENCY", 40)
 # Reasoning models spend tokens before answering; raise these when developing
 # against one. gpt-4o-mini never needs the headroom, and unused caps cost nothing.
 LLM_MAX_TOKENS_EXTRACT = _int("AMI_LLM_MAX_TOKENS_EXTRACT", 1200)
@@ -58,8 +64,7 @@ RETURN_CHAR_BUDGET = _int("AMI_RETURN_CHAR_BUDGET", 400000)
 # Agentic search: after the first retrieval, gpt-4o-mini checks whether the
 # evidence is complete and may fire a second targeted recall question. Each
 # round costs one extra LLM call + one extra embed pass.
-AGENTIC_SEARCH = os.environ.get("AMI_AGENTIC_SEARCH", "1") != "0"
-AGENTIC_MAX_ROUNDS = _int("AMI_AGENTIC_MAX_ROUNDS", 2)  # 2 = one reflection after the initial pass
+AGENTIC_SEARCH = os.environ.get("AMI_AGENTIC_SEARCH", "0") != "0"
 
 # --- auth (the platform smoke path uses none) --------------------------------
 AUTH_SCHEME = os.environ.get("AMI_AUTH_SCHEME", "none").lower()  # none|bearer|token|x-api-key

@@ -1,0 +1,19 @@
+# Optional override: publish the service through an existing Cloudflare tunnel
+# instead of binding a host port.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.edge.yml up -d
+#
+# The tunnel's connector must already run on the `edge` network below, and its
+# ingress rule should point at http://activememoryindex:8000.
+services:
+  activememoryindex:
+    ports: !override
+      - "127.0.0.1:8000:8000"
+    networks:
+      - default
+      - edge
+
+networks:
+  edge:
+    external: true
+    name: vip-gateway_default

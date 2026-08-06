@@ -5,10 +5,10 @@
 #   docker compose logs -f      # tail logs
 #   docker compose down         # stop
 #
-# Cloudflare tunnel routing: this service joins the vip-gateway_default network
-# so the existing cloudflared connector can reach it by container name. Add a
-# public hostname in Cloudflare Zero Trust pointing at:
-#   http://activememoryindex:8000
+# This file is self-contained: `docker compose up -d` works on any host with
+# Docker. To publish it through an existing Cloudflare tunnel instead, add
+# docker-compose.edge.yml as an override:
+#   docker compose -f docker-compose.yml -f docker-compose.edge.yml up -d
 
 services:
   activememoryindex:
@@ -21,18 +21,19 @@ services:
     environment:
       # Override at the shell for local testing: AMI_AUTH_SCHEME=none docker compose up -d
       - AMI_AUTH_SCHEME=${AMI_AUTH_SCHEME:-bearer}
-      - AMI_AGENTIC_SEARCH=${AMI_AGENTIC_SEARCH:-1}
+      - AMI_AGENTIC_SEARCH=${AMI_AGENTIC_SEARCH:-0}
     volumes:
       # SQLite database + any persistent state.
       - ami-data:/data
-    networks:
-      - default
-      - edge
     ports:
-      # Loopback only: cloudflared reaches this via container name on the edge
-      # network. 127.0.0.1 binding keeps the Add/Search API off the LAN.
-      - "127.0.0.1:8000:8000"
+      - "${AMI_BIND:-0.0.0.0}:8000:8000"
     restart: unless-stopped
+    logging:
+      # A 72-hour evaluation run otherwise fills the disk with access logs.
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
@@ -43,9 +44,4 @@ services:
 
 volumes:
   ami-data:
-
-networks:
-  default:
-  edge:
-    external: true
-    name: vip-gateway_default
+    name: ami-data
