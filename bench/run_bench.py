@@ -251,19 +251,36 @@ def platform_pipeline():
 
 
 def completer(model: str, base_url: str | None, api_key: str, args_max_tokens: int = 1024):
+    """Completion helper with explicit exponential backoff.
+
+    Lesson from the 2026-08-06 incident: the SDK's own retries exhaust within
+    seconds under a daily-quota 429, hundreds of calls then fail silently, and
+    empty answers judged WRONG masquerade as a dilution effect. Backoff here is
+    long enough to ride out per-minute limits, and the final failure RAISES —
+    the caller decides what a failure means, never a silent empty string.
+    """
+    import time as _time
+
     from openai import OpenAI
 
-    client = OpenAI(api_key=api_key or "none", base_url=base_url, timeout=600, max_retries=3)
+    client = OpenAI(api_key=api_key or "none", base_url=base_url, timeout=600, max_retries=0)
 
     reasoning = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
     def complete(prompt: str) -> str:
-        response = client.chat.completions.create(
-            model=model, messages=[{"role": "user", "content": prompt}], temperature=0,
-            max_tokens=args_max_tokens,
-        )
-        text = reasoning.sub("", response.choices[0].message.content or "")
-        return "" if "<think>" in text else text.strip()
+        last: Exception | None = None
+        for attempt in range(6):
+            try:
+                response = client.chat.completions.create(
+                    model=model, messages=[{"role": "user", "content": prompt}], temperature=0,
+                    max_tokens=args_max_tokens,
+                )
+                text = reasoning.sub("", response.choices[0].message.content or "")
+                return "" if "<think>" in text else text.strip()
+            except Exception as error:  # noqa: BLE001
+                last = error
+                _time.sleep(min(5 * 2 ** attempt, 120))
+        raise RuntimeError(f"completion failed after 6 attempts: {last}")
 
     return complete
 
@@ -274,22 +291,36 @@ def answer(args) -> None:
     results = json.loads((target / "retrieval.json").read_text(encoding="utf-8"))
     complete = completer(args.model, args.base_url, args.api_key, args.max_tokens)
 
+    # Resume: keep existing non-empty answers, regenerate only the gaps.
+    path = target / f"answers_p{args.prefix}.json"
+    kept: dict[str, dict] = {}
+    if path.exists():
+        kept = {row["id"]: row for row in json.loads(path.read_text(encoding="utf-8"))
+                if row.get("generated_answer", "").strip()}
+        if kept:
+            print(f"  resuming: {len(kept)} non-empty answers kept, {len(results)-len(kept)} to generate")
+
     def one(row: dict) -> dict:
+        if row["id"] in kept:
+            return kept[row["id"]]
         memories = "\n".join(entry["content"] for entry in row["ranked"][: args.prefix])
         prompt = pipeline.render_answer_prompt({"retrieved_context": memories, "question": row["question"]})
         try:
             generated = complete(prompt)
         except Exception as error:  # noqa: BLE001
             generated = ""
-            print(f"  answer failed for {row['id']}: {error}", flush=True)
+            print(f"  answer FAILED for {row['id']}: {error}", flush=True)
         return {"id": row["id"], "question": row["question"], "gold_answer": row["gold_answer"],
                 "category": row["category"], "generated_answer": generated}
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         answers = list(pool.map(one, results))
-    path = target / f"answers_p{args.prefix}.json"
     path.write_text(json.dumps(answers, ensure_ascii=False), encoding="utf-8")
+    empty = sum(1 for row in answers if not row["generated_answer"].strip())
     print(f"answered {len(answers)} questions at prefix {args.prefix} -> {path}")
+    if empty:
+        print(f"  *** {empty} EMPTY answers remain — rerun this command to fill them; do NOT judge yet ***")
+        sys.exit(2)
 
 
 def judge(args) -> None:
@@ -299,20 +330,27 @@ def judge(args) -> None:
     complete = completer(args.model, args.base_url, args.api_key, args.max_tokens)
 
     def one(row: dict) -> dict:
+        # A judge failure is a MISSING measurement, never a WRONG verdict.
         prompt = pipeline.render_accuracy_prompt(row, row["generated_answer"])
         try:
             raw = complete(prompt)
             label = pipeline.parse_judge_label(raw)
         except Exception as error:  # noqa: BLE001
-            raw, label = str(error), "WRONG"
+            print(f"  judge FAILED for {row['id']}: {error}", flush=True)
+            raw, label = f"JUDGE_ERROR: {error}", None
         return {**row, "label": label, "judge_raw": raw[:400]}
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         judged = list(pool.map(one, answers))
     path = target / f"judged_p{args.prefix}.json"
     path.write_text(json.dumps(judged, ensure_ascii=False), encoding="utf-8")
-    correct = sum(1 for row in judged if row["label"] == "CORRECT")
-    print(f"prefix {args.prefix}: accuracy {correct/len(judged):.3f} ({correct}/{len(judged)}) -> {path}")
+    valid = [row for row in judged if row["label"] is not None]
+    correct = sum(1 for row in valid if row["label"] == "CORRECT")
+    excluded = len(judged) - len(valid)
+    note = f", {excluded} judge-failures EXCLUDED" if excluded else ""
+    print(f"prefix {args.prefix}: accuracy {correct/max(len(valid),1):.3f} ({correct}/{len(valid)}{note}) -> {path}")
+    if excluded:
+        sys.exit(2)
 
 
 # --- cli ---------------------------------------------------------------------
