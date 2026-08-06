@@ -143,8 +143,8 @@ the memory text itself.
    paper reported a monotonic context-dilution curve on a 9B reader (accuracy 0.59 at 1 line →
    0.20 at 125), which predicts a short return set; we swept the limit over 1/2/3/5/10/20/40/100
    on LoCoMo using the platform's own answer and judge prompts and found the **opposite** for
-   `gpt-4o-mini` — accuracy rises monotonically (0.214 at 1 → 0.597 at 100, n=529), as does the
-   conditional rate at which the reader applies a retrieved gold memory (0.447 → 0.626).
+   `gpt-4o-mini` — accuracy rises monotonically (0.219 at 1 → 0.597 at 100, n=529), as does the
+   conditional rate at which the reader applies a retrieved gold memory (0.461 → 0.626).
    Returning 100 won every pairwise comparison on both tuning subsets and was then confirmed on a
    held-out subset never used for tuning (n=464, accuracy 0.584). Details and method in `bench/`.
 

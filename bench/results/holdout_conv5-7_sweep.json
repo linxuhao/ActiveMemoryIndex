@@ -1,0 +1,10 @@
+[
+  {
+    "prefix": 100,
+    "n": 464,
+    "accuracy": 0.584,
+    "coverage": 0.981,
+    "accuracy_given_retrieved": 0.591,
+    "accuracy_given_missed": 0.222
+  }
+]

@@ -258,6 +258,76 @@ def report(args) -> None:
         print(f"    category {category}: {sum(values)/len(values):.3f}  (n={len(values)})")
 
 
+def sweep(args) -> None:
+    """The return-limit sweep: accuracy and its decomposition at every prefix.
+
+    Joins the judged answers back to the retrieval record, so the table in the
+    README is reproducible from committed artifacts rather than from a one-off
+    script. `accuracy given gold retrieved` is the number that separates a
+    retrieval failure from an application failure, and nothing else here
+    computed it.
+    """
+    target = OUT / args.tag
+    chunk_source = OUT / (args.store_tag or args.tag)
+    chunks = json.loads((chunk_source / "chunks.json").read_text(encoding="utf-8"))
+    retrieval = {r["id"]: r for r in json.loads((target / "retrieval.json").read_text(encoding="utf-8"))}
+
+    rows = []
+    for path in sorted(target.glob("judged_p*.json"), key=lambda f: int(re.search(r"p(\d+)", f.name).group(1))):
+        prefix = int(re.search(r"judged_p(\d+)", path.name).group(1))
+        judged = [r for r in json.loads(path.read_text(encoding="utf-8")) if r.get("label") is not None]
+        if not judged:
+            continue
+        correct = sum(1 for r in judged if r["label"] == "CORRECT")
+        hit = miss = hit_ok = miss_ok = 0
+        for row in judged:
+            record = retrieval.get(row["id"])
+            gold = set(record["evidence"]) if record else set()
+            if not gold:
+                continue
+            found = any(item_dias(e["id"], chunks) & gold for e in record["ranked"][:prefix])
+            if found:
+                hit += 1
+                hit_ok += row["label"] == "CORRECT"
+            else:
+                miss += 1
+                miss_ok += row["label"] == "CORRECT"
+        rows.append({
+            "prefix": prefix, "n": len(judged),
+            "accuracy": round(correct / len(judged), 3),
+            "coverage": round(hit / max(hit + miss, 1), 3),
+            "accuracy_given_retrieved": round(hit_ok / max(hit, 1), 3),
+            "accuracy_given_missed": round(miss_ok / max(miss, 1), 3),
+        })
+
+    print(f"tag={args.tag}")
+    print(f"  {'prefix':<8}{'n':<7}{'accuracy':<11}{'coverage':<11}{'acc|gold':<11}{'acc|no-gold'}")
+    for row in rows:
+        print(f"  {row['prefix']:<8}{row['n']:<7}{row['accuracy']:<11.3f}{row['coverage']:<11.3f}"
+              f"{row['accuracy_given_retrieved']:<11.3f}{row['accuracy_given_missed']:.3f}")
+
+    if len(rows) > 1:
+        best = max(rows, key=lambda r: r["accuracy"])
+        print(f"\n  paired comparisons against the best prefix (p{best['prefix']}):")
+        best_labels = {r["id"]: r["label"] == "CORRECT"
+                       for r in json.loads((target / f"judged_p{best['prefix']}.json").read_text(encoding="utf-8"))
+                       if r.get("label") is not None}
+        for row in rows:
+            if row["prefix"] == best["prefix"]:
+                continue
+            other = {r["id"]: r["label"] == "CORRECT"
+                     for r in json.loads((target / f"judged_p{row['prefix']}.json").read_text(encoding="utf-8"))
+                     if r.get("label") is not None}
+            shared = [i for i in other if i in best_labels]
+            only_other = sum(1 for i in shared if other[i] and not best_labels[i])
+            only_best = sum(1 for i in shared if best_labels[i] and not other[i])
+            print(f"    p{row['prefix']:<4} vs p{best['prefix']:<4}: {only_other}:{only_best}  "
+                  f"net p{best['prefix']} {only_best - only_other:+d}  (n={len(shared)})")
+
+    (target / "sweep.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    print(f"\n  -> {target / 'sweep.json'}")
+
+
 # --- end-to-end layer --------------------------------------------------------
 def platform_pipeline():
     path = THIRD / "agent-memory-leaderboard" / "locomo-refined" / "pipeline.py"
@@ -398,6 +468,11 @@ def main() -> None:
     report_parser.add_argument("--tag", required=True)
     report_parser.add_argument("--store-tag", default=None)
     report_parser.set_defaults(run=report)
+
+    sweep_parser = commands.add_parser("sweep")
+    sweep_parser.add_argument("--tag", required=True)
+    sweep_parser.add_argument("--store-tag", default=None)
+    sweep_parser.set_defaults(run=sweep)
 
     for name, function in (("answer", answer), ("judge", judge)):
         parser = commands.add_parser(name)

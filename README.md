@@ -180,15 +180,21 @@ which the reader applies a retrieved gold memory:
 
 | memories returned | 1 | 5 | 10 | 20 | 40 | 100 |
 |---|---|---|---|---|---|---|
-| accuracy (n=529) | .214 | .361 | .433 | .488 | .552 | **.597** |
-| accuracy given gold retrieved | .447 | .510 | .556 | .580 | .605 | **.626** |
+| accuracy (n=529) | .219 | .353 | .427 | .482 | .554 | **.597** |
+| accuracy given gold retrieved | .461 | .493 | .551 | .578 | .603 | **.626** |
+| evidence actually retrieved | .410 | .641 | .741 | .815 | .885 | **.940** |
 
-Returning 100 wins every pairwise comparison on both tuning subsets, and the choice was then
-confirmed on a held-out subset never used for tuning (n=464, accuracy .584). The earlier audits
-used a 9B reader; `gpt-4o-mini` evidently uses extra context rather than drowning in it. The knob
-stays exposed because the right value is a property of the reader, not of the memory system —
-`AMI_RETURN_CHAR_BUDGET` must be raised alongside it, or the character budget silently truncates
-the list. Method in `bench/`.
+Returning 100 wins every pairwise comparison — against p40 by 34:11 flipped questions, against p1
+by 213:13 — and the choice was then confirmed on a held-out subset never used for tuning (n=464,
+accuracy .584). The earlier audits used a 9B reader; `gpt-4o-mini` evidently uses extra context
+rather than drowning in it. The knob stays exposed because the right value is a property of the
+reader, not of the memory system — `AMI_RETURN_CHAR_BUDGET` must be raised alongside it, or the
+character budget silently truncates the list.
+
+These are single-run numbers from a local harness with a local judge, not the platform's. Two
+independent re-runs of the same configuration differed by one question in 529 (~0.2 pp), so the
+monotone ordering is what to rely on, not the third decimal. Aggregates are committed in
+`bench/results/`; `bench/README.md` has the commands that regenerate them.
 
 ## Tests
 

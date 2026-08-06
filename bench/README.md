@@ -24,6 +24,48 @@ python bench/run_bench.py report   --tag base
 * **`answer` / `judge`** run the end-to-end layer with the platform's own answer and judge prompts,
   imported from the cloned `agent-memory-leaderboard` repository — never copied into this one.
 
+## Results
+
+The two subsets are LoCoMo conversations 2-4 (tuning, n=529 questions with evidence) and 5-7
+(held out, never used for tuning, n=464). Regenerate either table with:
+
+```bash
+bash bench/fetch.sh
+python bench/run_bench.py ingest   --server <url> --tag tuning --conv 2 3 4
+python bench/run_bench.py retrieve --server <url> --tag tuning --conv 2 3 4 --top-k 100
+for p in 1 5 10 20 40 100; do
+  python bench/run_bench.py answer --tag tuning --prefix $p
+  python bench/run_bench.py judge  --tag tuning --prefix $p
+done
+python bench/run_bench.py sweep --tag tuning
+```
+
+`sweep` joins the judged answers back to the retrieval record, so every column below comes from
+committed artifacts rather than an ad-hoc script. Aggregates live in `bench/results/`; the raw
+per-question files stay out of git because they contain LoCoMo questions and gold answers.
+
+**Return-limit sweep, tuning subset (conv 2-4, n=529).** `gpt-4o-mini` answering, the platform's
+verbatim answer and judge prompts:
+
+| memories returned | 1 | 5 | 10 | 20 | 40 | 100 |
+|---|---|---|---|---|---|---|
+| accuracy | .219 | .353 | .427 | .482 | .554 | **.597** |
+| evidence retrieved | .410 | .641 | .741 | .815 | .885 | **.940** |
+| accuracy given evidence retrieved | .461 | .493 | .551 | .578 | .603 | **.626** |
+
+Both rows rise with the return size: the reader finds more, *and* applies what it finds more often.
+That is the opposite of the dilution prior this harness was built to test. Paired against p100,
+every smaller prefix loses — p40 by 34:11 flipped questions, p20 by 73:12, p1 by 213:13.
+
+**Held-out confirmation (conv 5-7, n=464), at the chosen p100:** accuracy .584, evidence retrieved
+.981, accuracy given evidence retrieved .591. Consistent with the tuning subset, so the choice is
+not an artifact of the subset it was chosen on.
+
+**How much of this is noise.** Two independent answer+judge runs of the identical configuration
+(p100, n=529) differed by one question, ~0.2 pp. Differences of a few points are real; the third
+decimal is not. All of it is one local harness with one local judge — the platform's judge is a
+different instrument, so treat the ordering as the finding and the absolute values as indicative.
+
 ## Deviations from the official evaluation, stated up front
 
 * The platform evaluates `locomo_refined`; this harness uses the public `locomo10.json`.

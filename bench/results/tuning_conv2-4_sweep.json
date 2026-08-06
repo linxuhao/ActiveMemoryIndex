@@ -1,0 +1,50 @@
+[
+  {
+    "prefix": 1,
+    "n": 529,
+    "accuracy": 0.219,
+    "coverage": 0.41,
+    "accuracy_given_retrieved": 0.461,
+    "accuracy_given_missed": 0.051
+  },
+  {
+    "prefix": 5,
+    "n": 529,
+    "accuracy": 0.353,
+    "coverage": 0.641,
+    "accuracy_given_retrieved": 0.493,
+    "accuracy_given_missed": 0.105
+  },
+  {
+    "prefix": 10,
+    "n": 529,
+    "accuracy": 0.427,
+    "coverage": 0.741,
+    "accuracy_given_retrieved": 0.551,
+    "accuracy_given_missed": 0.073
+  },
+  {
+    "prefix": 20,
+    "n": 529,
+    "accuracy": 0.482,
+    "coverage": 0.815,
+    "accuracy_given_retrieved": 0.578,
+    "accuracy_given_missed": 0.061
+  },
+  {
+    "prefix": 40,
+    "n": 529,
+    "accuracy": 0.554,
+    "coverage": 0.885,
+    "accuracy_given_retrieved": 0.603,
+    "accuracy_given_missed": 0.18
+  },
+  {
+    "prefix": 100,
+    "n": 529,
+    "accuracy": 0.597,
+    "coverage": 0.94,
+    "accuracy_given_retrieved": 0.626,
+    "accuracy_given_missed": 0.156
+  }
+]
