@@ -90,8 +90,21 @@ def post(url: str, payload: dict, timeout: int = 900) -> dict:
         url, data=json.dumps(payload).encode("utf-8"),
         headers=headers, method="POST",
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read())
+    # Transient network hiccups (RemoteDisconnected, timeouts) retry; HTTP error
+    # codes do not — a 4xx/5xx from the service is a real result, not weather.
+    import http.client
+    import time as _time
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return json.loads(response.read())
+        except urllib.error.HTTPError:
+            raise
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, ConnectionError) as error:
+            if attempt == 3:
+                raise
+            _time.sleep(5 * (attempt + 1))
+            print(f"  transient {type(error).__name__} on {url}, retrying", flush=True)
 
 
 def chunk_hash(request_id: str) -> str:
