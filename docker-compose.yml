@@ -14,10 +14,11 @@ services:
   activememoryindex:
     build:
       context: .
-    image: activememoryindex:latest
-    container_name: activememoryindex
+    image: ${AMI_IMAGE:-activememoryindex:latest}
+    container_name: ${AMI_CONTAINER:-activememoryindex}
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       # Override at the shell for local testing: AMI_AUTH_SCHEME=none docker compose up -d
       - AMI_AUTH_SCHEME=${AMI_AUTH_SCHEME:-bearer}
@@ -26,7 +27,10 @@ services:
       # SQLite database + any persistent state.
       - ami-data:/data
     ports:
-      - "${AMI_BIND:-0.0.0.0}:8000:8000"
+      # Loopback by default: this service holds other people's memories and the
+      # auth token may still be unset. Set AMI_BIND=0.0.0.0 (or put a proxy in
+      # front) once you have configured a real AMI_AUTH_TOKEN.
+      - "${AMI_BIND:-127.0.0.1}:${AMI_PORT:-8000}:8000"
     restart: unless-stopped
     logging:
       # A 72-hour evaluation run otherwise fills the disk with access logs.
@@ -44,4 +48,6 @@ services:
 
 volumes:
   ami-data:
-    name: ami-data
+    # Overridable so a second clone on the same host cannot silently attach to
+    # an existing deployment's store.
+    name: ${AMI_VOLUME:-ami-data}

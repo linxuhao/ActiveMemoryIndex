@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hmac
 import logging
 
 import numpy as np
@@ -64,7 +65,7 @@ def check_auth(authorization: str | None, x_api_key: str | None) -> None:
             supplied.append(authorization.strip())
     if x_api_key:
         supplied.append(x_api_key.strip())
-    if config.AUTH_TOKEN and config.AUTH_TOKEN in supplied:
+    if config.AUTH_TOKEN and any(hmac.compare_digest(config.AUTH_TOKEN, s) for s in supplied):
         return
     raise HTTPException(status_code=401, detail={"reason": "invalid credentials"})
 
@@ -157,6 +158,11 @@ def select(index: store.UserIndex, scores: np.ndarray, top_k: int) -> list[tuple
 # --- endpoints ---------------------------------------------------------------
 @app.on_event("startup")
 def startup() -> None:
+    problem = config.auth_misconfigured()
+    if problem:
+        # Refusing to start is louder than 401-ing every request forever, which
+        # looks to the caller like their credentials are wrong.
+        raise RuntimeError(problem)
     store.init()
     embed.warm_up()
     log.info(
@@ -172,7 +178,17 @@ def startup() -> None:
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", **store.stats(), "llm": config.llm_available(), **llm.counters}
+    counters = dict(llm.counters)
+    calls, failures = counters["calls"], counters["failures"]
+    # "llm: true" only says a key is configured. A key that 401s on every call
+    # reported healthy right through a quota outage, so say so out loud.
+    degraded = calls >= 5 and failures / calls > 0.5
+    return {
+        "status": "degraded" if degraded else "ok",
+        **store.stats(),
+        "llm": config.llm_available(),
+        **counters,
+    }
 
 
 @app.post("/add", response_model=AddResponse)

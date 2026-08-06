@@ -20,13 +20,22 @@ cp .env.example .env
 # Edit .env: set OPENAI_API_KEY and AMI_AUTH_TOKEN (everything else has sensible defaults)
 docker compose up -d
 
-# Or standalone docker run:
+# Or standalone docker run (equivalent to the compose path):
 docker build -t activememoryindex .
-docker run -d --name ami -p 8000:8000 -v ami-data:/data \
+docker run -d --name ami -p 127.0.0.1:8000:8000 -v ami-data:/data \
   -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+  -e AMI_AUTH_SCHEME=bearer \
   -e AMI_AUTH_TOKEN="$AMI_AUTH_TOKEN" \
   activememoryindex
 ```
+
+The first build downloads PyTorch and the embedding weights: about 1 minute on a
+fast link, and a 2.5 GB image. Startup after that is ~4 seconds, with no network
+needed for retrieval.
+
+Both paths bind loopback only. Publish deliberately — set `AMI_BIND=0.0.0.0`
+(compose) or change the port mapping — and only once `AMI_AUTH_TOKEN` is a real
+secret.
 
 The service must be reachable at a public HTTPS URL for evaluation. Health is unauthenticated;
 Add and Search require `Authorization: Bearer <AMI_AUTH_TOKEN>`.
@@ -43,8 +52,12 @@ model download at run time.
 Verify a running instance against the contract:
 
 ```bash
-python scripts/smoke_contract.py http://127.0.0.1:8000
+python3 scripts/smoke_contract.py http://127.0.0.1:8000
 ```
+
+It reads `.env` for the auth scheme and token, so it works against an
+authenticated instance without extra flags. It needs **no** OpenAI key: the full
+suite passes in degraded mode, which is the cheapest way to verify a checkout.
 
 The script checks synchronous persistence, exact `request_id`/`user_id`/`session_id` echo,
 response shape, `top_k` bound, `user_id` isolation, idempotent re-adds, and 422 on malformed
@@ -59,8 +72,8 @@ All configuration is environment variables; **no credential is stored in this re
 | `OPENAI_API_KEY` | *(empty)* | key for the Add/Search model. Required for the full pipeline. |
 | `AMI_LLM_MODEL` | `gpt-4o-mini` | the model used by Add and Search. The challenge requires `gpt-4o-mini`; leave it. |
 | `OPENAI_BASE_URL` | *(unset)* | any OpenAI-compatible endpoint. Local development only. |
-| `AMI_LLM_CONCURRENCY` | `16` | cap on simultaneous provider calls, so a 64-worker Add burst queues instead of hitting 429s |
-| `AMI_LLM_TIMEOUT` | `60` | seconds per provider call |
+| `AMI_LLM_CONCURRENCY` | `40` | cap on simultaneous provider calls; matches the server threadpool, so the gate adds no queueing of its own |
+| `AMI_LLM_TIMEOUT` | `25` | seconds per provider call. With `AMI_LLM_RETRIES` (`1`), one Add stays well under a typical 100 s CDN cut-off |
 | `AMI_LLM_MAX_TOKENS_EXTRACT` / `_QUERY` | `1200` / `200` | completion caps; raise only when developing against a reasoning model |
 | `AMI_RECALL_WEIGHT` | `0.5` | weight of the user-voice recall-question channel in the fused score |
 | `AMI_RETURN_LIMIT` | `100` | maximum memories returned (never more than `top_k`) |
@@ -68,7 +81,7 @@ All configuration is environment variables; **no credential is stored in this re
 | `AMI_AGENTIC_SEARCH` | `0` | after retrieval, gpt-4o-mini reflects on gaps and may fire a second recall question. Off by default — measured at zero end-to-end gain when the full `top_k` is returned, at the cost of one extra LLM call per search |
 | `AMI_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | embedding model, runs locally on CPU |
 | `AMI_DB_PATH` | `/data/memory.sqlite3` | SQLite file |
-| `AMI_AUTH_SCHEME` | `bearer` | `none` \| `bearer` \| `token` \| `x-api-key`. Formal evals require auth; `none` is for local smoke only. |
+| `AMI_AUTH_SCHEME` | `bearer` | `none` \| `bearer` \| `token` \| `x-api-key`. Any of the three schemes carrying the right secret is accepted. The service **refuses to start** if a scheme is set and `AMI_AUTH_TOKEN` is empty or a placeholder — use `none` deliberately for local testing. |
 | `AMI_AUTH_TOKEN` | *(empty)* | expected secret when a scheme is set. This is the Memory System Key shared with the platform. |
 
 **Degraded mode.** With no `OPENAI_API_KEY` the service still starts and serves: it stores the raw
@@ -136,6 +149,19 @@ used a 9B reader; `gpt-4o-mini` evidently uses extra context rather than drownin
 stays exposed because the right value is a property of the reader, not of the memory system —
 `AMI_RETURN_CHAR_BUDGET` must be raised alongside it, or the character budget silently truncates
 the list. Method in `bench/`.
+
+## Tests
+
+```bash
+python3 tests/test_parse_facts.py     # write-path guards; standard library only
+docker run --rm -v "$PWD/tests:/srv/tests:ro" -w /srv activememoryindex \
+  python3 tests/test_concurrency.py   # needs numpy + app deps, so run it in the image
+```
+
+`test_parse_facts.py` pins the two ways a bad LLM reply could poison the store.
+`test_concurrency.py` pins the write path against the platform's retry policy:
+overlapping retries of one `request_id`, and a `request_id` reused by a second
+user. Both are plain scripts with exit codes, not pytest.
 
 ## Repository layout
 

@@ -27,6 +27,11 @@ def _load_dotenv() -> None:
         if not stripped or stripped.startswith("#") or "=" not in stripped:
             continue
         key, _, val = stripped.partition("=")
+        # Strip inline comments the way Docker Compose does, so a value read here
+        # matches the value the container actually receives. Without this,
+        # `AMI_AUTH_SCHEME=bearer   # none | bearer` parses as the whole comment
+        # and every authenticated request silently 401s.
+        val = val.split(" #", 1)[0].split("\t#", 1)[0]
         key, val = key.strip(), val.strip().strip('"').strip("'")
         if key and key not in os.environ:
             os.environ[key] = val

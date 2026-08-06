@@ -8,3 +8,4 @@ data/
 .venv/
 bench/out/
 bench/third_party/
+CLAUDE.md
