@@ -1,0 +1,32 @@
+# Reader-replicate adjudication of the hybrid A/B
+# 3 independent answer+judge runs per arm over the same fixed retrieval.
+
+control vs control (same config) acc 0.588 -> 0.591   flips +32/-27  net +5  discordant 59  p=0.6029
+control vs hybrid                acc 0.588 -> 0.605   flips +134/-107  net +27  discordant 241  p=0.0938
+control-replicate vs hybrid      acc 0.591 -> 0.605   flips +134/-112  net +22  discordant 246  p=0.1805
+
+per-run accuracy
+  control ['0.5877', '0.5909', '0.5877']
+  hybrid  ['0.6052', '0.6058', '0.6091']
+
+stable subset (all 3 runs agree in BOTH arms): 1403 / 1540  (8.9% dropped as reader-unstable)
+  accuracy on stable subset: control 0.599 -> hybrid 0.612  (+1.2pt)
+  flips +97 / -80   net +17   discordant 177   sign-test p = 0.2290
+
+majority-of-3 over ALL 1540 questions: control 0.589 -> hybrid 0.606  (+1.7pt)
+  flips +134 / -108   net +26   discordant 242   sign-test p = 0.1078
+
+majority-of-3, per category
+  cat  fixes breaks   net      n   net as %% of n
+   1      30     23     +7    282   +2.5pt
+   2      26     23     +3    321   +0.9pt
+   3       5     12     -7     96   -7.3pt
+   4      73     50    +23    841   +2.7pt
+  ALL    134    108    +26   1540   +1.7pt
+
+excluding category 2 (temporal, where the relative-date judge artifact lives):
+  fixes 108 breaks 85  net +23 on n=1219  = +1.9pt   sign-test p=0.1131
+
+run-level: control [0.5877, 0.5909, 0.5877]  mean 0.5887 sd 0.0019
+           hybrid  [0.6052, 0.6058, 0.6091]  mean 0.6067 sd 0.0021
+           gap +1.80pt ; worst hybrid run beats best control run by +1.43pt

@@ -1,0 +1,14 @@
+# End-to-end A/B, prefix 100, n=1540 (all 10 LoCoMo conversations)
+# Control and treatment on the same image; only AMI_HYBRID differs.
+
+tag=all10_ctrl
+  prefix  n      accuracy   coverage   acc|gold   acc|no-gold
+  100     1540   0.588      0.942      0.610      0.213
+
+  -> /srv/work/bench/out/all10_ctrl/sweep.json
+
+tag=all10_hyb
+  prefix  n      accuracy   coverage   acc|gold   acc|no-gold
+  100     1540   0.605      0.951      0.623      0.276
+
+  -> /srv/work/bench/out/all10_hyb/sweep.json
