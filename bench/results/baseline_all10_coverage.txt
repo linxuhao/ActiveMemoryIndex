@@ -1,0 +1,15 @@
+tag=all10  questions with evidence=1536/1540
+  k     recall   (a question counts when any evidence turn is inside the top k)
+  1     0.378   (580/1536)
+  5     0.615   (944/1536)
+  10    0.704   (1081/1536)
+  20    0.792   (1217/1536)
+  40    0.871   (1338/1536)
+  100   0.941   (1446/1536)
+  recall@20 using verbatim turns only: 0.596
+  recall@20 using extracted facts only: 0.783
+  recall@20 by LoCoMo category:
+    category 1: 0.809  (n=282)
+    category 2: 0.816  (n=321)
+    category 3: 0.565  (n=92)
+    category 4: 0.803  (n=841)

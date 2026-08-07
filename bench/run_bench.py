@@ -112,8 +112,12 @@ def post(url: str, payload: dict, timeout: int = 900) -> dict:
             print(f"  transient {type(error).__name__} on {url}, retrying", flush=True)
 
 
-def chunk_hash(request_id: str) -> str:
-    return hashlib.sha1(request_id.encode("utf-8")).hexdigest()[:16]
+def chunk_hash(request_id: str, user_id: str) -> str:
+    # Must stay byte-identical to app/store.py::item_id, which salts the digest
+    # with user_id. Salting was added to the service without updating this
+    # function, and the join key silently stopped matching: every fresh
+    # `report` read 0.000 recall on a healthy service.
+    return hashlib.sha1(f"{user_id}\x00{request_id}".encode("utf-8")).hexdigest()[:16]
 
 
 # --- phases ------------------------------------------------------------------
@@ -150,7 +154,7 @@ def ingest(args) -> None:
                     "request_id": request_id, "messages": messages, "user_id": user_id,
                     "session_id": f"local:{args.tag}:conv-{index}:s{number}",
                 })
-                chunks[chunk_hash(request_id)] = {
+                chunks[chunk_hash(request_id, user_id)] = {
                     "conv": index,
                     "dias": [d for d in message_dias.values() if d],
                     "msg_dias": message_dias,
@@ -161,8 +165,14 @@ def ingest(args) -> None:
         assert body.get("success") is True, body
         print(f"  added {payload['request_id']} ({len(payload['messages'])} messages)", flush=True)
 
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        list(pool.map(send, pending))
+    if getattr(args, "map_only", False):
+        # The chunk map is a pure function of the dataset, the tag and the
+        # conversation list. When only the map is stale, rebuilding it costs
+        # nothing; re-ingesting costs the whole extraction bill again.
+        print(f"map-only: skipping {len(pending)} /add calls")
+    else:
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            list(pool.map(send, pending))
     target = OUT / args.tag
     target.mkdir(parents=True, exist_ok=True)
     (target / "chunks.json").write_text(json.dumps(chunks, ensure_ascii=False), encoding="utf-8")
@@ -229,7 +239,19 @@ def report(args) -> None:
     chunks = json.loads((chunk_source / "chunks.json").read_text(encoding="utf-8"))
     results = json.loads((target / "retrieval.json").read_text(encoding="utf-8"))
     scored = [r for r in results if r["evidence"]]
-    cutoffs = [5, 10, 20, 40, 100]
+
+    # A join-key mismatch between this harness and app/store.py::item_id makes
+    # every recall read 0.000 on a perfectly healthy service. That is an
+    # instrument failure wearing the costume of a result, so refuse to print it.
+    retrieved = {e["id"][:16] for r in results for e in r["ranked"]}
+    if retrieved and not (retrieved & set(chunks)):
+        raise SystemExit(
+            f"join failure: none of {len(retrieved)} retrieved id prefixes appear among "
+            f"{len(chunks)} ingested chunk keys. The store was written by a different tag, "
+            f"or chunk_hash() has drifted from app/store.py::item_id. Not a 0.000 recall."
+        )
+
+    cutoffs = [1, 5, 10, 20, 40, 100]
     print(f"tag={args.tag}  questions with evidence={len(scored)}/{len(results)}")
     print("  k     recall   (a question counts when any evidence turn is inside the top k)")
     for k in cutoffs:
@@ -455,6 +477,8 @@ def main() -> None:
 
     ingest_parser = commands.add_parser("ingest")
     shared(ingest_parser, server=True)
+    ingest_parser.add_argument("--map-only", action="store_true",
+                               help="rebuild chunks.json without calling /add")
     ingest_parser.set_defaults(run=ingest)
 
     retrieve_parser = commands.add_parser("retrieve")
