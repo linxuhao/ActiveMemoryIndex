@@ -1,0 +1,33 @@
+=== dense control (AMI_HYBRID=0) ===
+tag=all10_ctrl  questions with evidence=1536/1540
+  k     recall   (a question counts when any evidence turn is inside the top k)
+  1     0.381   (585/1536)
+  5     0.615   (945/1536)
+  10    0.704   (1082/1536)
+  20    0.792   (1217/1536)
+  40    0.872   (1340/1536)
+  100   0.942   (1447/1536)
+  recall@20 using verbatim turns only: 0.596
+  recall@20 using extracted facts only: 0.785
+  recall@20 by LoCoMo category:
+    category 1: 0.801  (n=282)
+    category 2: 0.819  (n=321)
+    category 3: 0.565  (n=92)
+    category 4: 0.804  (n=841)
+
+=== hybrid RRF k=60 cand=200 (AMI_HYBRID=1) ===
+tag=all10_hyb  questions with evidence=1536/1540
+  k     recall   (a question counts when any evidence turn is inside the top k)
+  1     0.448   (688/1536)
+  5     0.688   (1057/1536)
+  10    0.787   (1209/1536)
+  20    0.852   (1309/1536)
+  40    0.903   (1387/1536)
+  100   0.951   (1460/1536)
+  recall@20 using verbatim turns only: 0.674
+  recall@20 using extracted facts only: 0.843
+  recall@20 by LoCoMo category:
+    category 1: 0.833  (n=282)
+    category 2: 0.879  (n=321)
+    category 3: 0.533  (n=92)
+    category 4: 0.883  (n=841)

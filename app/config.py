@@ -78,6 +78,17 @@ RETURN_CHAR_BUDGET = _int("AMI_RETURN_CHAR_BUDGET", 400000)
 # evidence is complete and may fire a second targeted recall question. Each
 # round costs one extra LLM call + one extra embed pass.
 AGENTIC_SEARCH = _env("AMI_AGENTIC_SEARCH", "0") != "0"
+# Hybrid retrieval: fuse the dense ranking with a BM25 (SQLite FTS5) ranking by
+# reciprocal rank. The two channels fail differently — dense loses rare proper
+# nouns in 384 dimensions, BM25 has no notion of synonymy — so the fusion is
+# over ranks, not scores. Scores are not commensurable: cosine is bounded,
+# BM25 is unbounded and drifts with corpus size.
+HYBRID = _env("AMI_HYBRID", "0") != "0"
+# RRF's flattening constant. 60 is the value from the original paper; it damps
+# the head so neither channel's top hit can dictate the merged order alone.
+HYBRID_RRF_K = _int("AMI_HYBRID_RRF_K", 60)
+# How deep to take the BM25 candidate list before fusing.
+HYBRID_CANDIDATES = _int("AMI_HYBRID_CANDIDATES", 200)
 
 # --- auth (the platform smoke path uses none) --------------------------------
 # Fail closed. A memory service reachable from the internet with auth off by
