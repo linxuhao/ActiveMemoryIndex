@@ -1,26 +1,44 @@
-# Arm comparison at prefix 100, n=1540, all 10 LoCoMo conversations.
-# Every arm searches the SAME store; only the ranking/ordering of the returned
-# 100 differs. Each accuracy figure is an independent answer+judge run over a
-# fixed retrieval, so the spread within a row is reader+judge noise alone.
+# What actually determines answer accuracy: the order of the returned set.
+# n=1540 (all 10 LoCoMo conversations), prefix 100, gpt-4o-mini answering with
+# the platform's own answer and judge prompts.
 #
-# arm                        chars  cov@20 cov@100  accuracy runs          mean
-dense                        12366    .792    .942  .5877 .5909 .5877     .5888
-hybrid FTS5+RRF w=1.0        12112    .852    .951  .6052 .6058 .6091     .6067
-hybrid FTS5+RRF w=0.5        12131    .831    .949  .5970 .5930           .5950
-hybrid FTS5+RRF w=2.0        12201    .863    .946  .5890 .5840           .5865
-hybrid kinds=fact             9974    .828    .961  .5560 .5690           .5625
-hybrid kinds=raw             14649    .685    .940  .6390 .6390           .6390
-dense + raw-first ordering   12366    .609    .942  .6330 .6400 .6270     .6333
+# Every arm below searches the SAME store. All but two return the SAME 100
+# memories in a different order, so anything they differ by is ordering alone.
 #
-# Reading:
-# * Retrieval coverage is not merely a weak proxy for accuracy here, it is
-#   inverted. kinds=fact has the best cov@100 (.961) and the worst accuracy
-#   (.5625); raw-first has the worst cov@20 (.609) and nearly the best accuracy.
-# * The lexical channel contributes almost nothing. "dense + raw-first" returns
-#   the identical 100 memories as dense in a different order, with no BM25, no
-#   index and no extra call, and reaches .6333 against hybrid kinds=raw .6390.
-# * Nor is it a context-volume effect: raw-first returns exactly as many
-#   characters as dense (12366), and kinds=raw returns 18% more for no gain.
-# * dense vs raw-first, majority of runs, per question: +162 / -63, net +99,
-#   sign test p = 3.1e-11. All four question categories improve. Hybrid's own
-#   net was +26 at p = 0.108, and it made category 3 worse.
+# arm               chars cov@20 cov@100  accuracy runs                mean     sd
+dense               12366   .792    .942  .5877 .5909 .5877           .5887  .0019
+hybrid FTS5+RRF     12112   .852    .951  .6052 .6058 .6091           .6067  .0021
+hybrid w=0.5        12131   .831    .949  .5970 .5930                 .5950
+hybrid w=2.0        12201   .863    .946  .5890 .5840                 .5865
+hybrid kinds=fact    9974   .828    .961  .5560 .5690                 .5625
+hybrid kinds=raw    14649   .685    .940  .6390 .6390                 .6390
+raw-first           12366   .609    .942  .6331 .6396 .6273           .6333  .0062
+sandwich            12366   .609    .942  .6338 .6338                 .6338  .0000
+fact-first          12366   .792    .942  .5831 .5825                 .5828  .0005
+diversity-cap       12733   .690    .942  .5844 .5753                 .5799  .0064
+#
+# Paired sign test against dense, run 1 vs run 1 (one estimator per arm):
+#   hybrid FTS5     +134 -107  net  +27   p = 9.4e-02
+#   raw-first       +149  -79  net  +70   p = 4.1e-06
+#   sandwich        +148  -77  net  +71   p = 2.6e-06
+#   fact-first       +78  -85  net   -7   p = 6.4e-01
+#   diversity-cap    +88  -93  net   -5   p = 7.7e-01
+#   sandwich vs raw-first  +52 -51  net +1   p = 1.000   (the same arm)
+#
+# What each arm rules out:
+# * raw-first vs fact-first. Both group by kind; only raw-first gains. The
+#   effect is verbatim turns at the head, not the absence of interleaving.
+# * sandwich vs raw-first. Splitting the verbatim turns across head and tail
+#   changes nothing (net +1). At ~3k tokens there is no lost-in-the-middle
+#   headroom to exploit.
+# * diversity-cap. Raising the distinct source chunks in the returned 100 from
+#   26.2 to 36.7 costs 0.9pt. Several facts from one chunk are corroborating
+#   detail about the episode that matters, not redundancy; the chunks promoted
+#   to replace them are lower-ranked and less relevant.
+# * hybrid kinds=raw vs raw-first. .6390 against .6333, inside raw-first's own
+#   run-to-run spread (.6273-.6396). BM25 buys nothing an ORDER BY does not.
+#
+# Retrieval coverage is inverted here, not merely weak: kinds=fact has the best
+# cov@100 of any arm and the worst accuracy; raw-first has the worst cov@20 and
+# nearly the best accuracy. Every arm returns the same evidence, so a metric
+# that scores whether the evidence was returned cannot see any of this.
