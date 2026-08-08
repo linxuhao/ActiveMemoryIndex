@@ -248,6 +248,19 @@ worth +4.5pt at ours. What we have not found stated anywhere is that a membershi
 character-identical reorder by *provenance* moves accuracy at all; deployed systems pick an order
 silently and disagree with each other about which one.
 
+**Why we do not return coarser memories, although it scores much better.** The contract caps the
+*count* of returned memories, not their size. Answering with the 20-message source chunks behind the
+top-100 ranked memories — the standard small-to-big pattern — scores **.711** against the .6333 we
+ship. We did not take it. Holding characters constant at the baseline's budget, the coarse unit
+*loses* 6.1pt (.572), because 4.9 whole chunks span 4.9 source chunks where 100 fragments span 26.2;
+every point it gains comes from the 5.4x more context it is allowed to carry, not from the unit. On
+accuracy per thousand tokens it is five times worse than the shipped arm and barely better than
+sending the entire conversation. And the limit is degenerate: one LoCoMo conversation is ~40 chunks,
+so "return every parent" is the whole transcript as 40 ≤ 100 memories. The full audit, including the
+control that could not be built and why, is in `bench/results/granularity_audit.txt`. We suggest the
+organisers cap returned tokens as well as returned items — TREC QA tightened answer strings from 250
+to 50 bytes for the same reason.
+
 **A warning about the retrieval metric.** Across these arms, retrieval coverage is not a weak proxy
 for accuracy — it is inverted. That retrieval metrics can go negatively correlated with end-to-end
 quality is itself reported by [Song et al.](https://arxiv.org/abs/2601.17532) (2026), and

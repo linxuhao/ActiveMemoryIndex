@@ -1,0 +1,64 @@
+# Does returning coarser memories improve the system, or only exploit the meter?
+#
+# The contract caps the COUNT of returned memories (top_k=100) and says nothing
+# about their size. "parent" answers a search with the distinct 20-message
+# source chunks the top-100 ranked memories came from, deduplicated, in rank
+# order — the standard small-to-big / parent-document pattern. It scores far
+# higher than anything else we ran. This file records why we did not ship it.
+#
+# n=1540, all 10 public LoCoMo conversations, gpt-4o-mini reader, the platform's
+# own answer and judge prompts, 2-3 independent runs per arm.
+#
+# arm                    items   chars   ~tok  accuracy   acc per 1k tok
+extracted facts only      99.2    9209    2.3     .513         .223
+100 memories, random     100.0   12366    3.1     .583         .188
+100 memories, relevance  100.0   12366    3.1     .5887        .190
+100 memories, raw-first  100.0   12366    3.1    *.6333*       .204   <- shipped
+verbatim memories only    99.8   16477    4.1     .624         .152
+parent, capped to the
+  baseline's characters    4.9   12277    3.1     .572         .186
+parent                    26.2   67176   16.8     .711         .042
+full context (Mem0 paper,
+  same reader, arXiv
+  2504.19413)               --  ~104000   26      .7290        .028
+#
+# The decomposition, from the two arms that hold one variable each:
+#
+#   change the unit at constant characters   .6333 -> .572   -6.1pt
+#   then grow the characters 5.4x            .572  -> .711  +13.9pt
+#   net against the shipped arm                             +7.8pt
+#
+# So the coarse unit is not what wins — it LOSES 6.1pt when it is not allowed to
+# bring extra characters with it. At a fixed budget, 100 fragments span 26.2
+# source chunks while 4.9 whole chunks span 4.9: breadth beats completeness, and
+# every point parent gains is bought with context volume.
+#
+# Volume and granularity cannot be separated under this contract. We tried to
+# build the control from the other side — spend parent's 67k characters on
+# individually ranked memories — and could not: under a 100-item cap our
+# per-message granularity tops out at ~12.4k characters. Wanting more text
+# *requires* declaring a coarser memory. That is a property of a count-based cap,
+# not a discovery about memory.
+#
+# Two consequences worth stating plainly:
+#
+# 1. Accuracy per token is the axis this product category lives on, and parent is
+#    5x worse on it than the arm we ship, barely better than sending everything.
+#    A LoCoMo accuracy figure reported without its token budget is unreadable.
+#
+# 2. The degenerate limit is legal. One LoCoMo conversation is ~40 chunks, so
+#    "return every parent" is the whole conversation verbatim as 40 <= 100
+#    memories. parent at 26.2 chunks is already 65% of the way there.
+#
+# This is not a novel exploit and we do not claim it as one: small-to-big is
+# Callan's passage-level evidence (SIGIR 1994) and ships as LangChain's
+# ParentDocumentRetriever, LlamaIndex's AutoMergingRetriever, and the DOCUMENTS
+# default of Vertex AI Search. Nor is it against the letter of the rules: it
+# returns nothing but the user's own words and uses no out-of-band information.
+# We did not ship it because it is not a memory result. The fix belongs to the
+# protocol, and there is precedent for making it: TREC QA tightened its answer
+# strings from 250 bytes to 50 after every organisation that submitted both
+# scored higher at 250.
+#
+# Recommendation to the organisers: cap returned tokens as well as returned
+# items, or publish tokens-per-query alongside accuracy on the leaderboard.
