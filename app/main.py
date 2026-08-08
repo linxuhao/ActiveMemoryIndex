@@ -178,7 +178,7 @@ def startup() -> None:
         log.warning("AMI_AUTH_SCHEME=%r is not a documented scheme; a secret is still "
                     "required, but check your configuration", config.AUTH_SCHEME)
     log.info(
-        "ready: auth=%s embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s raw_first=%s",
+        "ready: auth=%s embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s raw_first=%s cache_max=%d",
         config.AUTH_SCHEME,
         config.EMBED_MODEL,
         config.LLM_MODEL if config.llm_available() else "disabled",
@@ -187,6 +187,7 @@ def startup() -> None:
         config.RECALL_WEIGHT,
         "on" if config.AGENTIC_SEARCH else "off",
         "on" if config.RAW_FIRST else "off",
+        config.CACHE_MAX_ITEMS,
     )
 
 

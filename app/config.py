@@ -89,9 +89,15 @@ RAW_FIRST = _env("AMI_RAW_FIRST", "1") != "0"
 # Without a bound, a suite whose datasets carry one user_id per question — a
 # hundred thousand rows is 0.15 GB of vectors plus roughly as much again in
 # Python objects — grows until the process is killed, and a 72-hour evaluation
-# is a bad place to discover that. 400k rows is ~0.6 GB of vectors and leaves
-# LoCoMo-scale runs (~10k rows) untouched.
-CACHE_MAX_ITEMS = _int("AMI_CACHE_MAX_ITEMS", 400_000)
+# is a bad place to discover that.
+#
+# Sizing: one row costs 384 float32 (1.5 kB) plus roughly 0.5 kB of Python
+# object, so a million rows is about 2 GB. The default suits an 8 GB host; raise
+# it on a larger one. Where the host has zram, raising it is close to free — the
+# kernel compresses cold pages instead of the process dying, and a search that
+# touches a swapped-out user pays one decompression of a few megabytes. Note the
+# vectors themselves barely compress; the text does.
+CACHE_MAX_ITEMS = _int("AMI_CACHE_MAX_ITEMS", 1_000_000)
 
 # --- auth (the platform smoke path uses none) --------------------------------
 # Fail closed. A memory service reachable from the internet with auth off by
