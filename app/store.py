@@ -212,6 +212,10 @@ def match_expression(text: str, max_terms: int = 32) -> str:
     `fts5: syntax error`. Every token is quoted as a literal phrase and joined
     with OR, which is the bag-of-words reading BM25 expects.
     """
+    return " OR ".join(f'"{term}"' for term in _terms(text, max_terms))
+
+
+def _terms(text: str, max_terms: int = 32) -> list[str]:
     terms: list[str] = []
     seen: set[str] = set()
     for token in _MATCH_TOKEN.findall(text.lower()):
@@ -221,20 +225,23 @@ def match_expression(text: str, max_terms: int = 32) -> str:
         terms.append(token)
         if len(terms) >= max_terms:
             break
-    return " OR ".join(f'"{term}"' for term in terms)
+    return terms
 
 
 def lexical(user_id: str, text: str, limit: int) -> list[str]:
     """BM25-ranked item ids for *text*, best first. Empty list on no match."""
-    expression = match_expression(text)
-    if not expression:
-        return []
     with _lock:
+        expression = match_expression(text)
+        if not expression:
+            return []
+        # item_id is "<digest>-<kind initial><index>" (see item_id above), so the
+        # kind filter is a suffix test. tests/test_hybrid.py pins the format.
+        kind_clause = " AND item_id GLOB '*-f*'" if config.HYBRID_KINDS == "fact" else ""
         try:
             rows = _conn.execute(
                 "SELECT item_id FROM items_fts "
-                "WHERE items_fts MATCH ? AND user_id = ? "
-                "ORDER BY bm25(items_fts) LIMIT ?",
+                "WHERE items_fts MATCH ? AND user_id = ?" + kind_clause +
+                " ORDER BY bm25(items_fts) LIMIT ?",
                 (expression, user_id, limit),
             ).fetchall()
         except sqlite3.OperationalError:

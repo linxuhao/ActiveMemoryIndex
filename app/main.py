@@ -152,10 +152,11 @@ def fuse_lexical(index: store.UserIndex, scores: np.ndarray, user_id: str, query
     total = len(scores)
     fused = np.empty(total, dtype=np.float64)
     fused[np.argsort(-scores)] = 1.0 / (k + np.arange(1, total + 1))
+    weight = config.HYBRID_LEX_WEIGHT
     for position, item_id in enumerate(hits):
         row = index.positions.get(item_id)
         if row is not None:
-            fused[row] += 1.0 / (k + position + 1)
+            fused[row] += weight / (k + position + 1)
     return fused
 
 
@@ -207,7 +208,9 @@ def startup() -> None:
         config.RETURN_LIMIT,
         config.RECALL_WEIGHT,
         "on" if config.AGENTIC_SEARCH else "off",
-        f"on(k={config.HYBRID_RRF_K},cand={config.HYBRID_CANDIDATES})" if config.HYBRID else "off",
+        (f"on(k={config.HYBRID_RRF_K},cand={config.HYBRID_CANDIDATES},"
+         f"kinds={config.HYBRID_KINDS},lex_weight={config.HYBRID_LEX_WEIGHT:g})")
+        if config.HYBRID else "off",
     )
 
 

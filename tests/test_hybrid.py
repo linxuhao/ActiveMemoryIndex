@@ -62,6 +62,7 @@ class FakeIndex:
 index = FakeIndex(["a", "b", "c", "d"])
 dense = np.array([0.9, 0.8, 0.7, 0.1])
 
+_real_lexical = store.lexical
 store.lexical = lambda user_id, query, limit: []
 unchanged = main.fuse_lexical(index, dense, "u", "anything")
 ok &= check(np.array_equal(unchanged, dense),
@@ -88,9 +89,60 @@ fused = main.fuse_lexical(index, dense, "u", "anything")
 ok &= check(list(np.argsort(-fused)) == [0, 1, 2, 3],
             "an id absent from the user index is ignored, not an IndexError")
 
+store.lexical = lambda user_id, query, limit: ["d"]
+config.HYBRID_LEX_WEIGHT = 1.0
+full = main.fuse_lexical(index, dense, "u", "anything")
+config.HYBRID_LEX_WEIGHT = 0.25
+damped = main.fuse_lexical(index, dense, "u", "anything")
+# On a 4-row index the dense rank gaps are ~3e-4 while one lexical hit adds
+# weight*1.6e-2, so no useful weight leaves the dense order intact here. The
+# invariant that holds at any size is that the weight scales the promotion.
+margin = lambda f: f[3] - f[0]
+ok &= check(0 < margin(damped) < margin(full),
+            "a lower lexical weight shrinks the promotion instead of removing it")
+config.HYBRID_LEX_WEIGHT = 0.0
+ok &= check(np.array_equal(np.argsort(-main.fuse_lexical(index, dense, "u", "q")),
+                           np.argsort(-dense)),
+            "lexical weight 0 reproduces the dense ordering exactly")
+config.HYBRID_LEX_WEIGHT = 1.0
+
 config.HYBRID = False
 ok &= check(np.array_equal(main.fuse_lexical(index, dense, "u", "q"), dense),
             "the flag is honoured: hybrid off is exactly dense")
+
+store.lexical = _real_lexical   # section 2 stubbed it; section 3 needs the real one
+
+# --- 3. the kind filter and the lexical weight ---------------------------------------------------------
+# The kind filter is a suffix test on item_id, so pin the format it depends on.
+ok &= check(store.item_id("req", "fact", 3, "u").endswith("-f3")
+            and store.item_id("req", "raw", 3, "u").endswith("-r3"),
+            "item_id still encodes kind as the suffix the kind filter matches")
+
+import tempfile  # noqa: E402
+
+with tempfile.TemporaryDirectory() as directory:
+    config.DB_PATH = str(Path(directory) / "t.sqlite3")
+    store._conn = None
+    store.init()
+    vectors = np.ones((1, 4), dtype=np.float32)
+    corpus = [
+        ("I went to the Warhol Museum with Melanie", "raw"),
+        ("Melanie likes coffee", "fact"),
+        ("Melanie went running", "fact"),
+        ("Melanie called her sister", "fact"),
+    ]
+    for position, (text, kind) in enumerate(corpus):
+        item = store.Item(id=store.item_id(f"r{position}", kind, 0, "u"),
+                          kind=kind, parent_id=None, content=text, created_at=None)
+        store.add("u", "s", f"r{position}", [item], vectors)
+
+    config.HYBRID_KINDS = "fact"
+    hits = store.lexical("u", "Melanie", 10)
+    ok &= check(hits and all("-f" in h for h in hits),
+                "kinds=fact confines the lexical channel to the normalised layer")
+    config.HYBRID_KINDS = "all"
+    ok &= check(any("-r" in h for h in store.lexical("u", "Melanie", 10)),
+                "kinds=all still ranks verbatim turns")
 
 print("\nOK" if ok else "\nFAILED")
 sys.exit(0 if ok else 1)

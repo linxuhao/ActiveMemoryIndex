@@ -89,6 +89,19 @@ HYBRID = _env("AMI_HYBRID", "0") != "0"
 HYBRID_RRF_K = _int("AMI_HYBRID_RRF_K", 60)
 # How deep to take the BM25 candidate list before fusing.
 HYBRID_CANDIDATES = _int("AMI_HYBRID_CANDIDATES", 200)
+# Which stored kinds the lexical channel may rank. BM25 rewards literal overlap,
+# so it prefers the verbatim turn over the extracted fact that paraphrases it —
+# but the fact is the normalised form (named subject, absolute date) the reader
+# depends on. "fact" confines the lexical channel to the normalised layer.
+HYBRID_KINDS = _env("AMI_HYBRID_KINDS", "all")
+# Weight on the lexical channel's reciprocal-rank contribution. Reciprocal rank
+# fusion has no representation of "no match": when a question's distinctive
+# terms are absent from the corpus, BM25 still returns a full ranking built from
+# whatever common words remain, and RRF fuses that noise at full weight. A
+# per-query gate on document frequency was measured and rejected (it fired on
+# 18.8% of the affected category but also 3.3% of the largest one); a scalar
+# weight bounds the damage without needing to detect it.
+HYBRID_LEX_WEIGHT = _float("AMI_HYBRID_LEX_WEIGHT", 1.0)
 
 # --- auth (the platform smoke path uses none) --------------------------------
 # Fail closed. A memory service reachable from the internet with auth off by
