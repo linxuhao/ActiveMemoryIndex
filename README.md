@@ -106,7 +106,7 @@ All configuration is environment variables; **no credential is stored in this re
 | `OPENAI_BASE_URL` | *(unset)* | any OpenAI-compatible endpoint. Local development only. |
 | `AMI_LLM_CONCURRENCY` | `40` | cap on simultaneous provider calls; matches the server threadpool, so the gate adds no queueing of its own |
 | `AMI_LLM_TIMEOUT` | `25` | seconds per provider call. With `AMI_LLM_RETRIES` (`1`), one Add stays well under a typical 100 s CDN cut-off |
-| `AMI_LLM_MAX_TOKENS_EXTRACT` / `_QUERY` | `1200` / `200` | completion caps; raise only when developing against a reasoning model |
+| `AMI_LLM_MAX_TOKENS_EXTRACT` / `AMI_LLM_MAX_TOKENS_QUERY` | `1200` / `200` | completion caps; raise only when developing against a reasoning model |
 | `AMI_RECALL_WEIGHT` | `0.5` | weight of the user-voice recall-question channel in the fused score |
 | `AMI_RETURN_LIMIT` | `100` | maximum memories returned (never more than `top_k`) |
 | `AMI_RAW_FIRST` | `1` | order the returned set verbatim turns first, extracted facts second; changes order, never membership |
@@ -298,8 +298,10 @@ app/llm.py       the single LLM (gpt-4o-mini): fact extraction + recall-question
 app/embed.py     bge-small-en-v1.5 embeddings
 app/store.py     SQLite store with a per-user in-process vector cache
 scripts/         contract smoke test, prompt calibration
-tests/           write-path guards and write-path concurrency (plain scripts, not pytest)
+tests/           write-path guards, write-path concurrency, returned-set ordering
+                 (plain scripts, not pytest)
 bench/           offline LoCoMo harness used to set the retrieval knobs; not in the image
+bench/results/   committed aggregates behind every number quoted in this file
 ```
 
 ## Disclosure of original work and changes

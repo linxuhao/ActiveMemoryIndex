@@ -2,8 +2,9 @@
 
 The leaderboard does not publish a smoke test set, gold answers, or a dataset download, and the
 code-submission route cannot trigger a smoke run itself. This harness reconstructs an equivalent
-local loop from public parts so that the two retrieval knobs (`AMI_RETURN_LIMIT`,
-`AMI_RECALL_WEIGHT`) are set from data rather than from taste — the formal evaluation runs once.
+local loop from public parts so that every retrieval decision (`AMI_RETURN_LIMIT`,
+`AMI_RECALL_WEIGHT`, `AMI_RAW_FIRST`) is set from data rather than from taste — the formal
+evaluation runs once.
 
 Nothing from the platform or the datasets is vendored here. `fetch.sh` downloads them.
 
@@ -23,6 +24,22 @@ python bench/run_bench.py report   --tag base
   ranking knobs can be swept cheaply and without judge noise.
 * **`answer` / `judge`** run the end-to-end layer with the platform's own answer and judge prompts,
   imported from the cloned `agent-memory-leaderboard` repository — never copied into this one.
+
+## What is in `results/`
+
+| file | what it settles |
+|---|---|
+| `tuning_conv2-4_sweep.json`, `holdout_conv5-7_sweep.json` | the return-limit sweep and its held-out confirmation |
+| `baseline_all10_coverage.txt` | retrieval coverage over all ten conversations, n=1536 |
+| `ordering_ab_all10.txt` | the ordering of the returned set: relevance vs random vs verbatim-first vs facts-first vs diversity-capped |
+| `hybrid_ab_all10.txt`, `hybrid_e2e_all10.txt`, `hybrid_replicates_all10.txt` | the BM25 hybrid channel that was built, measured and removed |
+| `granularity_audit.txt` | why the higher-scoring coarse-granularity option was not shipped |
+
+Two habits these files exist to enforce. **Read a retrieval number and an end-to-end number as
+different things** — across the arms in `ordering_ab_all10.txt` they are *inverted*, and a
+pre-registered gate on coverage would have selected the worst configuration. **Read any accuracy
+figure next to its token budget** — `granularity_audit.txt` shows accuracy rising monotonically with
+returned characters, so an accuracy quoted without tokens-per-query is not interpretable.
 
 ## Results
 
