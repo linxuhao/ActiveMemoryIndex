@@ -23,8 +23,8 @@ services:
       # Override at the shell for local testing: AMI_AUTH_SCHEME=none docker compose up -d
       - AMI_AUTH_SCHEME=${AMI_AUTH_SCHEME:-bearer}
       - AMI_AGENTIC_SEARCH=${AMI_AGENTIC_SEARCH:-0}
-      - AMI_RAW_FIRST=${AMI_RAW_FIRST:-0}
-      - AMI_HYBRID=${AMI_HYBRID:-0}
+      - AMI_RETURN_LIMIT=${AMI_RETURN_LIMIT:-100}
+      - AMI_RAW_FIRST=${AMI_RAW_FIRST:-1}
     volumes:
       # SQLite database + any persistent state.
       - ami-data:/data

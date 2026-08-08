@@ -78,34 +78,10 @@ RETURN_CHAR_BUDGET = _int("AMI_RETURN_CHAR_BUDGET", 400000)
 # evidence is complete and may fire a second targeted recall question. Each
 # round costs one extra LLM call + one extra embed pass.
 AGENTIC_SEARCH = _env("AMI_AGENTIC_SEARCH", "0") != "0"
-# Hybrid retrieval: fuse the dense ranking with a BM25 (SQLite FTS5) ranking by
-# reciprocal rank. The two channels fail differently — dense loses rare proper
-# nouns in 384 dimensions, BM25 has no notion of synonymy — so the fusion is
-# over ranks, not scores. Scores are not commensurable: cosine is bounded,
-# BM25 is unbounded and drifts with corpus size.
-HYBRID = _env("AMI_HYBRID", "0") != "0"
-# RRF's flattening constant. 60 is the value from the original paper; it damps
-# the head so neither channel's top hit can dictate the merged order alone.
-HYBRID_RRF_K = _int("AMI_HYBRID_RRF_K", 60)
-# How deep to take the BM25 candidate list before fusing.
-HYBRID_CANDIDATES = _int("AMI_HYBRID_CANDIDATES", 200)
-# Which stored kinds the lexical channel may rank. BM25 rewards literal overlap,
-# so it prefers the verbatim turn over the extracted fact that paraphrases it —
-# but the fact is the normalised form (named subject, absolute date) the reader
-# depends on. "fact" confines the lexical channel to the normalised layer.
-HYBRID_KINDS = _env("AMI_HYBRID_KINDS", "all")
-# Weight on the lexical channel's reciprocal-rank contribution. Reciprocal rank
-# fusion has no representation of "no match": when a question's distinctive
-# terms are absent from the corpus, BM25 still returns a full ranking built from
-# whatever common words remain, and RRF fuses that noise at full weight. A
-# per-query gate on document frequency was measured and rejected (it fired on
-# 18.8% of the affected category but also 3.3% of the largest one); a scalar
-# weight bounds the damage without needing to detect it.
-HYBRID_LEX_WEIGHT = _float("AMI_HYBRID_LEX_WEIGHT", 1.0)
 # Order the returned memories verbatim-turns-first, extracted-facts-second,
 # each block still in relevance order. This changes only the order of the set
 # already selected, never which memories are returned.
-RAW_FIRST = _env("AMI_RAW_FIRST", "0") != "0"
+RAW_FIRST = _env("AMI_RAW_FIRST", "1") != "0"
 
 # --- auth (the platform smoke path uses none) --------------------------------
 # Fail closed. A memory service reachable from the internet with auth off by

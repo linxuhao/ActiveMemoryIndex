@@ -109,6 +109,7 @@ All configuration is environment variables; **no credential is stored in this re
 | `AMI_LLM_MAX_TOKENS_EXTRACT` / `_QUERY` | `1200` / `200` | completion caps; raise only when developing against a reasoning model |
 | `AMI_RECALL_WEIGHT` | `0.5` | weight of the user-voice recall-question channel in the fused score |
 | `AMI_RETURN_LIMIT` | `100` | maximum memories returned (never more than `top_k`) |
+| `AMI_RAW_FIRST` | `1` | order the returned set verbatim turns first, extracted facts second; changes order, never membership |
 | `AMI_RETURN_CHAR_BUDGET` | `400000` | character budget for one response; large enough never to truncate `AMI_RETURN_LIMIT` silently |
 | `AMI_AGENTIC_SEARCH` | `0` | after retrieval, gpt-4o-mini reflects on gaps and may fire a second recall question. Off by default — measured at zero end-to-end gain when the full `top_k` is returned, at the cost of one extra LLM call per search |
 | `AMI_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | embedding model, runs locally on CPU |
@@ -156,7 +157,11 @@ expressions from the memory text itself.
    the fused similarity `(1-w)·sim(query) + w·sim(recall question)`.
 3. The ranked list is deduplicated and truncated to at most `AMI_RETURN_LIMIT` memories, always
    within `top_k`, under a character budget.
-4. Optionally (`AMI_AGENTIC_SEARCH=1`, **off by default**), `gpt-4o-mini` inspects the top results
+4. The selected memories are ordered **verbatim turns first, extracted facts second**, each block
+   keeping its relevance order (`AMI_RAW_FIRST`, on by default). This changes the order of the
+   returned set and never its membership. See "Why the order of the returned set is the largest
+   lever we found" below.
+5. Optionally (`AMI_AGENTIC_SEARCH=1`, **off by default**), `gpt-4o-mini` inspects the top results
    and may fire a second targeted recall question if evidence is missing; results from both rounds
    are merged and deduplicated. See "Why the agentic round is off" below.
 
@@ -191,9 +196,47 @@ rather than drowning in it. The knob stays exposed because the right value is a 
 reader, not of the memory system — `AMI_RETURN_CHAR_BUDGET` must be raised alongside it, or the
 character budget silently truncates the list.
 
-These are single-run numbers from a local harness with a local judge, not the platform's. Two
-independent re-runs of the same configuration differed by one question in 529 (~0.2 pp), so the
-monotone ordering is what to rely on, not the third decimal. Aggregates are committed in
+**Why the order of the returned set is the largest lever we found.** Having fixed *what* to
+return, we asked what else could matter, expecting the answer to be better retrieval. It was not.
+Ordering the same returned memories verbatim-turns-first is worth more than every retrieval change
+we tried, combined. Measured over all ten LoCoMo conversations (n=1540), three independent
+answer+judge runs per arm so that the spread within a row is reader and judge noise alone:
+
+| ordering / ranking of the returned 100 | accuracy | vs dense, paired |
+|---|---|---|
+| diversity cap (≤2 memories per source chunk) | .5799 | net −5, p = 0.77 |
+| extracted facts first | .5828 | net −7, p = 0.64 |
+| relevance order (what a dense ranker gives) | .5887 | — |
+| hybrid BM25 + dense, reciprocal rank fusion | .6067 | net +27, p = 0.094 |
+| **verbatim turns first** | **.6333** | **net +70, p = 4×10⁻⁶** |
+
+A verbatim turn is the primary source; an extracted fact is a lossy paraphrase of it, and the
+reader attends to the head of the context. Three competing explanations were tested and ruled out:
+
+* It is **not** that grouping by kind spares the reader from switching register — putting *facts*
+  first groups just as tidily and gains nothing (net −7).
+* It is **not** head-and-tail attention — splitting the verbatim turns across head *and* tail is
+  indistinguishable from putting them all at the head (net +1, p = 1.000). At ~3k tokens there is
+  no lost-in-the-middle headroom to exploit.
+* It is **not** context volume — the winning arm returns exactly as many characters as the
+  baseline (12,366), and an arm returning 18% more gained nothing for it.
+
+A lexical BM25 channel (SQLite FTS5, fused by reciprocal rank) was built, measured and **removed**.
+It was worth +1.8pt on its own but is dominated: confining it to verbatim turns reached .6390,
+inside the run-to-run spread of the ordering change alone (.6273–.6396), so the index, the query
+language and the fusion rule bought nothing an `ORDER BY` does not. The negative result is kept in
+`bench/results/ordering_ab_all10.txt`.
+
+**A warning about the retrieval metric.** Across these arms, retrieval coverage is not a weak proxy
+for accuracy — it is inverted. The arm with the best coverage at k=100 (.961) had the worst accuracy
+(.5625); the winning arm has the worst coverage at k=20 (.609) of anything we ran. Every arm returns
+the same evidence, so a metric that scores *whether the evidence was returned* is structurally blind
+to all of this. We had pre-registered a coverage threshold as the gate for changing the service, and
+it would have selected the wrong configuration.
+
+These are numbers from a local harness with a local judge, not the platform's. Re-running an
+identical configuration moves accuracy by ~0.2pp and flips ~4% of questions, so the ordering of
+configurations is what to rely on, not the third decimal. Aggregates are committed in
 `bench/results/`; `bench/README.md` has the commands that regenerate them.
 
 ## Tests

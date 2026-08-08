@@ -137,7 +137,11 @@ the memory text itself.
    retrieval and, if evidence looks incomplete, generate a second targeted recall question,
    merging and re-ranking both rounds. Disabled (`AMI_AGENTIC_SEARCH=0`) because it measured
    zero end-to-end gain at the deployed return size while costing an extra call per search.
-4. **Return policy:** The ranked list is deduplicated and returned up to `AMI_RETURN_LIMIT`
+4. **Verbatim-first ordering:** The selected memories are returned verbatim turns first,
+   extracted facts second, each block keeping its relevance order (`AMI_RAW_FIRST=1`). This
+   changes the order of the returned set, never its membership, and it is the single largest
+   lever we measured — larger than every retrieval change we tried, combined (see below).
+5. **Return policy:** The ranked list is deduplicated and returned up to `AMI_RETURN_LIMIT`
    (100) memories, never exceeding `top_k`, under a character budget (400,000) set large enough
    never to truncate that list silently. This value is **measured, not assumed**. The underlying
    paper reported a monotonic context-dilution curve on a 9B reader (accuracy 0.59 at 1 line →
@@ -178,6 +182,33 @@ What was **adapted** from the paper for this submission:
 | Verbose storage is safe with good retrieval | The dual-store: keep everything (verbatim) + index clean keys (facts) |
 
 What is **new** in this submission (not in the paper):
+
+0. **Verbatim-first ordering of the returned set — the largest single lever, and the one we
+   did not expect.** Having fixed *what* to return, we looked for further gains in *retrieval*
+   and found almost none there. Ordering the same returned memories verbatim-turns-first is
+   worth more than every retrieval change we tried. Over all ten LoCoMo conversations
+   (n=1540), three independent answer+judge runs per arm:
+
+   | ordering / ranking of the returned 100 | accuracy | vs relevance order, paired |
+   |---|---|---|
+   | diversity cap (≤2 memories per source chunk) | .5799 | net −5, p = 0.77 |
+   | extracted facts first | .5828 | net −7, p = 0.64 |
+   | relevance order (dense ranking) | .5887 | — |
+   | hybrid BM25 + dense (reciprocal rank fusion) | .6067 | net +27, p = 0.094 |
+   | **verbatim turns first** | **.6333** | **net +70, p = 4×10⁻⁶** |
+
+   A verbatim turn is the primary source; an extracted fact is a lossy paraphrase of it. Three
+   competing explanations were tested and ruled out: it is not the grouping (facts-first groups
+   identically and gains nothing), not head-and-tail attention (splitting the verbatim turns
+   across head and tail is indistinguishable, net +1, p = 1.000), and not context volume (the
+   winning arm returns exactly as many characters as the baseline). A **lexical BM25 channel
+   (SQLite FTS5 + reciprocal rank fusion) was built, measured and removed** — worth +1.8pt
+   alone, but dominated by the ordering change, which needs no index and no extra call.
+
+   We also record that our own pre-registered gate for this decision was the wrong instrument.
+   Retrieval coverage is inverted against accuracy across these arms: the arm with the best
+   coverage at k=100 had the *worst* accuracy. Every arm returns the same evidence, so a metric
+   that scores whether the evidence was returned cannot see ordering at all.
 
 1. **Dual-store architecture** — The paper stores only extracted facts. This submission stores
    both verbatim turns and extracted facts in parallel, embedded with the same model, so the

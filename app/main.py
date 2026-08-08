@@ -135,31 +135,6 @@ def rank(index: store.UserIndex, query: str, options: list[str] | None,
     return scores
 
 
-def fuse_lexical(index: store.UserIndex, scores: np.ndarray, user_id: str, query: str) -> np.ndarray:
-    """Fuse the dense ranking with BM25 by reciprocal rank.
-
-    Rank fusion rather than score fusion: cosine is bounded in [-1, 1] while
-    BM25 is unbounded and corpus-dependent, so any fixed weighting of the two
-    raw scores is set by their accidental scales. Every row keeps a dense rank,
-    so a query that matches nothing lexically degrades exactly to dense-only.
-    """
-    if not config.HYBRID:
-        return scores
-    hits = store.lexical(user_id, query, config.HYBRID_CANDIDATES)
-    if not hits:
-        return scores
-    k = config.HYBRID_RRF_K
-    total = len(scores)
-    fused = np.empty(total, dtype=np.float64)
-    fused[np.argsort(-scores)] = 1.0 / (k + np.arange(1, total + 1))
-    weight = config.HYBRID_LEX_WEIGHT
-    for position, item_id in enumerate(hits):
-        row = index.positions.get(item_id)
-        if row is not None:
-            fused[row] += weight / (k + position + 1)
-    return fused
-
-
 def select(index: store.UserIndex, scores: np.ndarray, top_k: int) -> list[tuple[store.Item, float]]:
     limit = min(top_k, config.RETURN_LIMIT)
     chosen: list[tuple[store.Item, float]] = []
@@ -195,9 +170,6 @@ def startup() -> None:
         # looks to the caller like their credentials are wrong.
         raise RuntimeError(problem)
     store.init()
-    backfilled = store.backfill_fts()
-    if backfilled:
-        log.info("lexical index backfilled for %d rows", backfilled)
     embed.warm_up()
     if config.AUTH_SCHEME == "none":
         log.warning("auth is DISABLED (AMI_AUTH_SCHEME=none): anyone who can reach this "
@@ -206,7 +178,7 @@ def startup() -> None:
         log.warning("AMI_AUTH_SCHEME=%r is not a documented scheme; a secret is still "
                     "required, but check your configuration", config.AUTH_SCHEME)
     log.info(
-        "ready: auth=%s embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s raw_first=%s hybrid=%s",
+        "ready: auth=%s embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s raw_first=%s",
         config.AUTH_SCHEME,
         config.EMBED_MODEL,
         config.LLM_MODEL if config.llm_available() else "disabled",
@@ -215,9 +187,6 @@ def startup() -> None:
         config.RECALL_WEIGHT,
         "on" if config.AGENTIC_SEARCH else "off",
         "on" if config.RAW_FIRST else "off",
-        (f"on(k={config.HYBRID_RRF_K},cand={config.HYBRID_CANDIDATES},"
-         f"kinds={config.HYBRID_KINDS},lex_weight={config.HYBRID_LEX_WEIGHT:g})")
-        if config.HYBRID else "off",
     )
 
 
@@ -300,7 +269,6 @@ def search(
 
     # Round 1: standard fused retrieval
     scores1 = rank(index, request.query, request.options)
-    scores1 = fuse_lexical(index, scores1, request.user_id, request.query)
     chosen1 = select(index, scores1, request.top_k)
 
     # Agentic round: reflect → maybe a second retrieval
@@ -312,7 +280,6 @@ def search(
             if ref_question:
                 scores2 = rank(index, request.query, request.options,
                                recall_question=ref_question)
-                scores2 = fuse_lexical(index, scores2, request.user_id, ref_question)
                 chosen2 = select(index, scores2, request.top_k)
                 # Merge: combine, deduplicate by content key, keep best score
                 merged: dict[str, tuple[store.Item, float]] = {}
