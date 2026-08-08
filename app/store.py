@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,7 +18,8 @@ from . import config
 
 _lock = threading.RLock()
 _conn: sqlite3.Connection | None = None
-_cache: dict[str, "UserIndex"] = {}
+_cache: "OrderedDict[str, UserIndex]" = OrderedDict()
+_cached_items = 0
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
@@ -141,7 +143,10 @@ def add(user_id: str, session_id: str, request_id: str, items: list[Item], vecto
             "INSERT OR REPLACE INTO requests (request_id, user_id) VALUES (?, ?)", (request_id, user_id)
         )
         _conn.commit()
+        global _cached_items
         index.append(items, vectors)
+        _cached_items += len(items)
+        _evict_to_fit()
         return len(items)
 
 
@@ -150,9 +155,23 @@ def get(user_id: str) -> UserIndex:
         return _load(user_id)
 
 
+def _evict_to_fit() -> None:
+    """Hold the cache under AMI_CACHE_MAX_ITEMS rows, oldest use first.
+
+    Callers already hold a live reference to whatever they were handed, so
+    dropping an entry never invalidates an in-flight request; the next lookup
+    reads it back from SQLite, which is the source of truth either way.
+    """
+    global _cached_items
+    while _cached_items > config.CACHE_MAX_ITEMS and len(_cache) > 1:
+        _, evicted = _cache.popitem(last=False)
+        _cached_items -= len(evicted.items)
+
+
 def _load(user_id: str) -> UserIndex:
     index = _cache.get(user_id)
     if index is not None:
+        _cache.move_to_end(user_id)
         return index
     index = UserIndex()
     rows = _conn.execute(
@@ -163,7 +182,10 @@ def _load(user_id: str) -> UserIndex:
         items = [Item(id=r[0], kind=r[1], parent_id=r[2], content=r[3], created_at=r[4]) for r in rows]
         matrix = np.vstack([np.frombuffer(r[5], dtype=np.float32) for r in rows])
         index.append(items, matrix)
+    global _cached_items
     _cache[user_id] = index
+    _cached_items += len(index.items)
+    _evict_to_fit()
     return index
 
 

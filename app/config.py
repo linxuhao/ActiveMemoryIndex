@@ -83,6 +83,16 @@ AGENTIC_SEARCH = _env("AMI_AGENTIC_SEARCH", "0") != "0"
 # already selected, never which memories are returned.
 RAW_FIRST = _env("AMI_RAW_FIRST", "1") != "0"
 
+# --- memory ------------------------------------------------------------------
+# Upper bound on rows held in the per-user vector cache, across all users. The
+# cache is a read-through of SQLite, so eviction costs a reload, never a result.
+# Without a bound, a suite whose datasets carry one user_id per question — a
+# hundred thousand rows is 0.15 GB of vectors plus roughly as much again in
+# Python objects — grows until the process is killed, and a 72-hour evaluation
+# is a bad place to discover that. 400k rows is ~0.6 GB of vectors and leaves
+# LoCoMo-scale runs (~10k rows) untouched.
+CACHE_MAX_ITEMS = _int("AMI_CACHE_MAX_ITEMS", 400_000)
+
 # --- auth (the platform smoke path uses none) --------------------------------
 # Fail closed. A memory service reachable from the internet with auth off by
 # default is the worst available default, and a launch path that forgets to set
