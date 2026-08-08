@@ -177,7 +177,7 @@ What was **adapted** from the paper for this submission:
 
 | Paper finding | How it's used here |
 |---|---|
-| Register-matching beats query rewriting | The recall-question channel: ask "Did I tell you about X?" in first person, fuse with original query |
+| Register-matching beats query rewriting | The recall-question channel: ask "Did I tell you about X?" in first person, fuse with original query. **This is HyDE** (Gao et al., 2022, arXiv:2212.10496) with a first-person recall question as the hypothesis; the 50/50 fusion is HyDE's own N=1 case, since blending the two similarities is algebraically identical to averaging the two embeddings. Only the prompt — a recall *question* rather than a hypothetical *answer*, for a first-person corpus — is specific to this work. |
 | Context-dilution curve (0.59 → 0.20) | **Tested and not reproduced on `gpt-4o-mini`.** The paper's 9B reader loses accuracy as context grows; this reader gains it. We therefore return the full `top_k` (100) rather than the short set the paper's curve implies — the reversal is reported here rather than hidden because it is a property of the reader, not of the memory system |
 | Verbose storage is safe with good retrieval | The dual-store: keep everything (verbatim) + index clean keys (facts) |
 
@@ -212,7 +212,13 @@ What is **new** in this submission (not in the paper):
 
 1. **Dual-store architecture** — The paper stores only extracted facts. This submission stores
    both verbatim turns and extracted facts in parallel, embedded with the same model, so the
-   verbatim channel catches details extraction misses.
+   verbatim channel catches details extraction misses. **This is not novel and we do not claim it
+   is**: Zep/Graphiti (episode subgraph plus entity subgraph) and MemGPT/Letta (recall plus
+   archival memory) ship the same dual store, and *Fidelity Before Structure* (arXiv:2601.00821)
+   reports that on LoCoMo the union of chunks and extracted artifacts is statistically
+   indistinguishable from verbatim chunks alone (42.5 vs 43.9, McNemar p=0.39). Our contribution
+   here is only the ordering of that union (item 0), which recovers value their ablation could not
+   see because their reader prompt has a single undifferentiated context slot.
 2. **Fact extraction prompt** — The extraction pipeline (24 atomic first-person facts per
    chunk, timestamp prefixing, no-inference constraint) was written specifically for this
    submission to work with `gpt-4o-mini` on the LoCoMo dataset.

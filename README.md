@@ -168,7 +168,14 @@ expressions from the memory text itself.
 Search returns memory evidence only. It never produces or disguises a final answer, and never
 reads outside the requested `user_id`.
 
-**Why the user-voice question.** In our own per-fact audits, matching the *register* of the store
+**Why the user-voice question.** This is [HyDE](https://arxiv.org/abs/2212.10496) (Gao, Ma, Lin
+and Callan, 2022) with a first-person recall question as the hypothesis. The fusion is HyDE's own:
+because `(1-w)·(q·d) + w·(r·d) = ((1-w)·q + w·r)·d`, scoring against a weighted blend of the two
+similarities *is* averaging the two embeddings, which at `w=0.5` is HyDE's N=1 case and the default
+in mainstream RAG libraries. Only the prompt is ours — HyDE generates a hypothetical *answer*, we
+generate a first-person *recall question*, because the corpus is a first-person chat log. The
+sibling for sparse retrieval is [query2doc](https://arxiv.org/abs/2303.07678). In our own per-fact
+audits, matching the *register* of the store
 beat every trained retrieval front end we measured: embedding a first-person "Did I tell you …"
 question retrieved the gold line in the top-6 at 0.384, versus 0.216 for a keyword elicited from a
 fine-tuned adapter and 0.152 for a keyword from the frozen model, over the same 241-line store and
@@ -227,8 +234,25 @@ inside the run-to-run spread of the ordering change alone (.6273–.6396), so th
 language and the fusion rule bought nothing an `ORDER BY` does not. The negative result is kept in
 `bench/results/ordering_ab_all10.txt`.
 
+**Where this sits in the literature.** We are not claiming the ordering axis is untouched.
+[COMBO](https://arxiv.org/abs/2310.14393) (Zhang et al., EMNLP 2023) fixes the arrangement of
+generated and retrieved passages as a deliberate, ablated design choice — and puts the *generated*
+passage first, the opposite of what we measure, for a fine-tuned reader resolving conflicts.
+[Tan et al.](https://arxiv.org/abs/2401.11911) (ACL 2024, appendix B.3) vary generated-first
+against retrieved-first on a frozen reader. [Fidelity Before
+Structure](https://arxiv.org/abs/2601.00821) already establishes, on LoCoMo, that verbatim chunks
+beat extracted artifacts and that indexing both is *accuracy-neutral* against verbatim alone
+(42.5 vs 43.9, McNemar p=0.39) — with a single undifferentiated context slot, so ordering was never
+a variable. Our result qualifies that: the artifacts are accuracy-neutral **at their ordering**, and
+worth +4.5pt at ours. What we have not found stated anywhere is that a membership-identical,
+character-identical reorder by *provenance* moves accuracy at all; deployed systems pick an order
+silently and disagree with each other about which one.
+
 **A warning about the retrieval metric.** Across these arms, retrieval coverage is not a weak proxy
-for accuracy — it is inverted. The arm with the best coverage at k=100 (.961) had the worst accuracy
+for accuracy — it is inverted. That retrieval metrics can go negatively correlated with end-to-end
+quality is itself reported by [Song et al.](https://arxiv.org/abs/2601.17532) (2026), and
+[Samuel et al.](https://arxiv.org/abs/2603.08819) (ICTIR 2026) report the opposite for coverage at
+the system level; we record what we measured on these arms rather than adjudicating that. The arm with the best coverage at k=100 (.961) had the worst accuracy
 (.5625); the winning arm has the worst coverage at k=20 (.609) of anything we ran. Every arm returns
 the same evidence, so a metric that scores *whether the evidence was returned* is structurally blind
 to all of this. We had pre-registered a coverage threshold as the gate for changing the service, and
