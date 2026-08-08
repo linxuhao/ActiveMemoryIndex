@@ -236,7 +236,11 @@ def lexical(user_id: str, text: str, limit: int) -> list[str]:
             return []
         # item_id is "<digest>-<kind initial><index>" (see item_id above), so the
         # kind filter is a suffix test. tests/test_hybrid.py pins the format.
-        kind_clause = " AND item_id GLOB '*-f*'" if config.HYBRID_KINDS == "fact" else ""
+        kind_clause = ""
+        if config.HYBRID_KINDS == "fact":
+            kind_clause = " AND item_id GLOB '*-f*'"
+        elif config.HYBRID_KINDS == "raw":
+            kind_clause = " AND item_id GLOB '*-r*'"
         try:
             rows = _conn.execute(
                 "SELECT item_id FROM items_fts "

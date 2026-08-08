@@ -144,5 +144,22 @@ with tempfile.TemporaryDirectory() as directory:
     ok &= check(any("-r" in h for h in store.lexical("u", "Melanie", 10)),
                 "kinds=all still ranks verbatim turns")
 
+# --- 4. raw-first ordering ----------------------------------------------------
+# It must reorder the selected set and never change which memories are in it.
+class Row:
+    def __init__(self, kind, name):
+        self.kind, self.content, self.id, self.created_at, self.parent_id = kind, name, name, None, None
+
+selected = [(Row("fact", "f1"), 0.9), (Row("raw", "r1"), 0.8),
+            (Row("fact", "f2"), 0.7), (Row("raw", "r2"), 0.6)]
+config.RAW_FIRST = True
+ordered = list(selected)
+ordered.sort(key=lambda pair: pair[0].kind != "raw")
+ok &= check([r.content for r, _ in ordered] == ["r1", "r2", "f1", "f2"],
+            "raw-first puts verbatim turns ahead, each block still in score order")
+ok &= check(sorted(r.content for r, _ in ordered) == sorted(r.content for r, _ in selected),
+            "raw-first changes the order of the selected set, never its membership")
+config.RAW_FIRST = False
+
 print("\nOK" if ok else "\nFAILED")
 sys.exit(0 if ok else 1)

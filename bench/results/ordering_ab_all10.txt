@@ -1,0 +1,26 @@
+# Arm comparison at prefix 100, n=1540, all 10 LoCoMo conversations.
+# Every arm searches the SAME store; only the ranking/ordering of the returned
+# 100 differs. Each accuracy figure is an independent answer+judge run over a
+# fixed retrieval, so the spread within a row is reader+judge noise alone.
+#
+# arm                        chars  cov@20 cov@100  accuracy runs          mean
+dense                        12366    .792    .942  .5877 .5909 .5877     .5888
+hybrid FTS5+RRF w=1.0        12112    .852    .951  .6052 .6058 .6091     .6067
+hybrid FTS5+RRF w=0.5        12131    .831    .949  .5970 .5930           .5950
+hybrid FTS5+RRF w=2.0        12201    .863    .946  .5890 .5840           .5865
+hybrid kinds=fact             9974    .828    .961  .5560 .5690           .5625
+hybrid kinds=raw             14649    .685    .940  .6390 .6390           .6390
+dense + raw-first ordering   12366    .609    .942  .6330 .6400 .6270     .6333
+#
+# Reading:
+# * Retrieval coverage is not merely a weak proxy for accuracy here, it is
+#   inverted. kinds=fact has the best cov@100 (.961) and the worst accuracy
+#   (.5625); raw-first has the worst cov@20 (.609) and nearly the best accuracy.
+# * The lexical channel contributes almost nothing. "dense + raw-first" returns
+#   the identical 100 memories as dense in a different order, with no BM25, no
+#   index and no extra call, and reaches .6333 against hybrid kinds=raw .6390.
+# * Nor is it a context-volume effect: raw-first returns exactly as many
+#   characters as dense (12366), and kinds=raw returns 18% more for no gain.
+# * dense vs raw-first, majority of runs, per question: +162 / -63, net +99,
+#   sign test p = 3.1e-11. All four question categories improve. Hybrid's own
+#   net was +26 at p = 0.108, and it made category 3 worse.

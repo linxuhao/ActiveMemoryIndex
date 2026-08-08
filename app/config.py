@@ -102,6 +102,10 @@ HYBRID_KINDS = _env("AMI_HYBRID_KINDS", "all")
 # 18.8% of the affected category but also 3.3% of the largest one); a scalar
 # weight bounds the damage without needing to detect it.
 HYBRID_LEX_WEIGHT = _float("AMI_HYBRID_LEX_WEIGHT", 1.0)
+# Order the returned memories verbatim-turns-first, extracted-facts-second,
+# each block still in relevance order. This changes only the order of the set
+# already selected, never which memories are returned.
+RAW_FIRST = _env("AMI_RAW_FIRST", "0") != "0"
 
 # --- auth (the platform smoke path uses none) --------------------------------
 # Fail closed. A memory service reachable from the internet with auth off by

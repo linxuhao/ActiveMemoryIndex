@@ -177,6 +177,12 @@ def select(index: store.UserIndex, scores: np.ndarray, top_k: int) -> list[tuple
         chosen.append((item, float(scores[int(position)])))
         if len(chosen) >= limit or budget <= 0:
             break
+    if config.RAW_FIRST:
+        # Verbatim turns first, extracted facts after, each block keeping its
+        # relevance order. The selected set is untouched — only its order — but
+        # the reader attends to the head of the context, and a verbatim turn is
+        # the primary source while a fact is a lossy paraphrase of it.
+        chosen.sort(key=lambda pair: pair[0].kind != "raw")
     return chosen
 
 
@@ -200,7 +206,7 @@ def startup() -> None:
         log.warning("AMI_AUTH_SCHEME=%r is not a documented scheme; a secret is still "
                     "required, but check your configuration", config.AUTH_SCHEME)
     log.info(
-        "ready: auth=%s embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s hybrid=%s",
+        "ready: auth=%s embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s raw_first=%s hybrid=%s",
         config.AUTH_SCHEME,
         config.EMBED_MODEL,
         config.LLM_MODEL if config.llm_available() else "disabled",
@@ -208,6 +214,7 @@ def startup() -> None:
         config.RETURN_LIMIT,
         config.RECALL_WEIGHT,
         "on" if config.AGENTIC_SEARCH else "off",
+        "on" if config.RAW_FIRST else "off",
         (f"on(k={config.HYBRID_RRF_K},cand={config.HYBRID_CANDIDATES},"
          f"kinds={config.HYBRID_KINDS},lex_weight={config.HYBRID_LEX_WEIGHT:g})")
         if config.HYBRID else "off",
