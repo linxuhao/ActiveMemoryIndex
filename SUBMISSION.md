@@ -5,7 +5,7 @@ Paste-ready materials for the evaluation access request. Keep in sync with `READ
 | field | value |
 |---|---|
 | System name | ActiveMemoryIndex |
-| Version | 1.0.0 (commit `0388aeb` pinned at submission) |
+| Version | 1.1.0 (commit `7b15b22` pinned) |
 | Evaluation type | Textual Memory |
 | Division / route | Academic Methods · API (self-hosted) |
 | Repository | https://github.com/linxuhao/ActiveMemoryIndex |
