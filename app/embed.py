@@ -19,8 +19,13 @@ def _get_model():
     if _model is None:
         with _lock:
             if _model is None:
+                import torch
                 from sentence_transformers import SentenceTransformer
 
+                # Set before the first forward pass, and only when configured, so
+                # a deployment that wants torch's own heuristic can have it.
+                if config.EMBED_THREADS > 0:
+                    torch.set_num_threads(config.EMBED_THREADS)
                 _model = SentenceTransformer(config.EMBED_MODEL, device=config.EMBED_DEVICE)
     return _model
 

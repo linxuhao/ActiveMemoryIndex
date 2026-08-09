@@ -123,6 +123,7 @@ All configuration is environment variables; **no credential is stored in this re
 | `AMI_LLM_RETRIES` | `1` | retries per provider call |
 | `AMI_LLM_MAX_FACTS` | `24` | cap on extracted facts per Add chunk (a cap, not a target) |
 | `AMI_EMBED_DEVICE` / `AMI_EMBED_BATCH` | `cpu` / `64` | embedding device and batch size |
+| `AMI_EMBED_THREADS` | `1` | intra-op threads for the embedder. One is right when the server is already serving concurrently — 16 to 64 requests each opening an OpenMP team oversubscribes the machine and the workers wait in barriers. Measured on 8 cores: Add-shaped calls 3.61/s at 8 threads against 4.53/s at 1; Search-shaped 70.4/s against 101.8/s. `0` leaves torch's heuristic alone |
 | `AMI_EXTRACT` / `AMI_RECALL_QUERY` | `1` / `1` | set either to `0` to disable that LLM channel |
 | `AMI_LLM_DISABLE_THINKING` | `0` | development only: suppress reasoning output from a local reasoning model |
 

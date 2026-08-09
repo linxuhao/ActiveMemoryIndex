@@ -37,6 +37,13 @@ DB_PATH = _env("AMI_DB_PATH", "/data/memory.sqlite3")
 # --- embedding model ---------------------------------------------------------
 EMBED_MODEL = _env("AMI_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 EMBED_DEVICE = _env("AMI_EMBED_DEVICE", "cpu")
+# Intra-op threads for the embedder. One is right whenever the server is already
+# serving requests concurrently: the platform sends 16-64 at a time, so each of
+# them opening its own OpenMP team oversubscribes the machine several times over
+# and the workers spend their time in barriers. Measured on 8 cores / 16 threads,
+# 16 concurrent Add-shaped calls (44 texts): 3.61/s at 8 threads, 4.53/s at 1.
+# Search-shaped calls (2 texts, 32 concurrent): 70.4/s at 8, 101.8/s at 1.
+EMBED_THREADS = _int("AMI_EMBED_THREADS", 1)
 EMBED_BATCH = _int("AMI_EMBED_BATCH", 64)
 
 # --- LLM (competition rule: must be gpt-4o-mini for a leaderboard run) --------
