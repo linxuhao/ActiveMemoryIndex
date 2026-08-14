@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import hmac
 import logging
+import re
 
 import numpy as np
 from fastapi import FastAPI, Header, HTTPException
@@ -135,26 +136,66 @@ def rank(index: store.UserIndex, query: str, options: list[str] | None,
     return scores
 
 
+RAW_ID = re.compile(r"(.+)-r(\d+)$")
+
+
+def neighbours(index: store.UserIndex, item: store.Item) -> list[store.Item]:
+    """The turns either side of *item* within the Add chunk it came from.
+
+    Item ids are "<chunk digest>-r<position>" (see store.item_id), so a
+    neighbour is the same digest at position +/- k. Positions that were empty at
+    write time simply do not exist and are skipped.
+    """
+    match = RAW_ID.match(item.id)
+    if not match or config.WINDOW_RADIUS <= 0:
+        return []
+    prefix, position = match.group(1), int(match.group(2))
+    out = []
+    for offset in range(-config.WINDOW_RADIUS, config.WINDOW_RADIUS + 1):
+        if offset == 0:
+            continue
+        row = index.by_id.get(f"{prefix}-r{position + offset}")
+        if row is not None:
+            out.append(index.items[row])
+    return out
+
+
 def select(index: store.UserIndex, scores: np.ndarray, top_k: int) -> list[tuple[store.Item, float]]:
     limit = min(top_k, config.RETURN_LIMIT)
     chosen: list[tuple[store.Item, float]] = []
     seen: set[str] = set()
     budget = config.RETURN_CHAR_BUDGET
-    for position in np.argsort(-scores):
-        item = index.items[int(position)]
+
+    def take(item: store.Item, score: float) -> bool:
+        """Append one memory if it is new and affordable. True when full."""
+        nonlocal budget
         key = " ".join(item.content.lower().split())[:120]
         if key in seen:
-            continue
+            return False
         if len(item.content) > budget and chosen:
-            continue
+            return False
         seen.add(key)
         budget -= len(item.content)
-        chosen.append((item, float(scores[int(position)])))
-        if len(chosen) >= limit or budget <= 0:
+        chosen.append((item, score))
+        return len(chosen) >= limit or budget <= 0
+
+    for position in np.argsort(-scores):
+        item = index.items[int(position)]
+        score = float(scores[int(position)])
+        if take(item, score):
+            break
+        # A verbatim turn brings its neighbours, which take slots from the same
+        # top_k — breadth of sources traded for local context, not extra text.
+        full = False
+        for neighbour in neighbours(index, item):
+            if take(neighbour, score):
+                full = True
+                break
+        if full:
             break
     if config.RAW_FIRST:
         # Verbatim turns first, extracted facts after, each block keeping its
-        # relevance order. The selected set is untouched — only its order — but
+        # relevance order. This step reorders, it never adds or drops — but
         # the reader attends to the head of the context, and a verbatim turn is
         # the primary source while a fact is a lossy paraphrase of it.
         chosen.sort(key=lambda pair: pair[0].kind != "raw")
@@ -178,7 +219,7 @@ def startup() -> None:
         log.warning("AMI_AUTH_SCHEME=%r is not a documented scheme; a secret is still "
                     "required, but check your configuration", config.AUTH_SCHEME)
     log.info(
-        "ready: auth=%s embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s raw_first=%s cache_max=%d embed_threads=%d",
+        "ready: auth=%s embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s raw_first=%s window=%d cache_max=%d embed_threads=%d",
         config.AUTH_SCHEME,
         config.EMBED_MODEL,
         config.LLM_MODEL if config.llm_available() else "disabled",
@@ -187,6 +228,7 @@ def startup() -> None:
         config.RECALL_WEIGHT,
         "on" if config.AGENTIC_SEARCH else "off",
         "on" if config.RAW_FIRST else "off",
+        config.WINDOW_RADIUS,
         config.CACHE_MAX_ITEMS,
         config.EMBED_THREADS,
     )

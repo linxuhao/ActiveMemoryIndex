@@ -25,6 +25,7 @@ services:
       - AMI_AGENTIC_SEARCH=${AMI_AGENTIC_SEARCH:-0}
       - AMI_RETURN_LIMIT=${AMI_RETURN_LIMIT:-100}
       - AMI_RAW_FIRST=${AMI_RAW_FIRST:-1}
+      - AMI_WINDOW_RADIUS=${AMI_WINDOW_RADIUS:-1}
     volumes:
       # SQLite database + any persistent state.
       - ami-data:/data

@@ -56,7 +56,13 @@ class UserIndex:
     def __init__(self) -> None:
         self.items: list[Item] = []
         self.matrix: np.ndarray | None = None
+        # id -> row, so the neighbours of a selected turn can be found without
+        # scanning the user's whole history on every search.
+        self.by_id: dict[str, int] = {}
+
     def append(self, items: list[Item], vectors: np.ndarray) -> None:
+        for offset, item in enumerate(items):
+            self.by_id[item.id] = len(self.items) + offset
         self.items.extend(items)
         self.matrix = vectors if self.matrix is None else np.vstack([self.matrix, vectors])
 

@@ -89,6 +89,17 @@ AGENTIC_SEARCH = _env("AMI_AGENTIC_SEARCH", "0") != "0"
 # each block still in relevance order. This changes only the order of the set
 # already selected, never which memories are returned.
 RAW_FIRST = _env("AMI_RAW_FIRST", "1") != "0"
+# Return each selected verbatim turn together with the turns either side of it,
+# from the same Add chunk. A single message is often not self-contained — the
+# pronoun's antecedent, the other speaker's reply and the session's date all sit
+# in the neighbouring turns — and the answer model cannot recover what was never
+# sent. Neighbours consume slots from the same top_k, so this trades breadth of
+# sources for local context rather than returning more text: measured on LoCoMo
+# it moves 26.2 distinct source chunks to 20.9 and adds 8% characters.
+# Radius 1, 2 and 3 were statistically indistinguishable from one another
+# (.6802 / .6695 / .6763, paired p=0.16 and p=0.69); all three beat radius 0
+# (.6333) decisively. 1 is shipped because it keeps the most breadth per slot.
+WINDOW_RADIUS = _int("AMI_WINDOW_RADIUS", 1)
 
 # --- memory ------------------------------------------------------------------
 # Upper bound on rows held in the per-user vector cache, across all users. The

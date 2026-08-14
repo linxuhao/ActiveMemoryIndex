@@ -109,6 +109,7 @@ All configuration is environment variables; **no credential is stored in this re
 | `AMI_LLM_MAX_TOKENS_EXTRACT` / `AMI_LLM_MAX_TOKENS_QUERY` | `1200` / `200` | completion caps; raise only when developing against a reasoning model |
 | `AMI_RECALL_WEIGHT` | `0.5` | weight of the user-voice recall-question channel in the fused score |
 | `AMI_RETURN_LIMIT` | `100` | maximum memories returned (never more than `top_k`) |
+| `AMI_WINDOW_RADIUS` | `1` | return each selected verbatim turn with the turns either side of it from the same Add chunk. A single message often is not self-contained — the antecedent, the reply, and the session date are in the neighbours. Neighbours take slots from the same `top_k`, so this trades breadth of sources for local context rather than returning more text. `.6333` → `.6802` on LoCoMo (n=1540, paired p<0.0001); radius 1, 2 and 3 were indistinguishable, so 1 is shipped for keeping the most breadth per slot. `0` disables it |
 | `AMI_RAW_FIRST` | `1` | order the returned set verbatim turns first, extracted facts second; changes order, never membership |
 | `AMI_RETURN_CHAR_BUDGET` | `400000` | character budget for one response; large enough never to truncate `AMI_RETURN_LIMIT` silently |
 | `AMI_AGENTIC_SEARCH` | `0` | after retrieval, gpt-4o-mini reflects on gaps and may fire a second recall question. Off by default — measured at zero end-to-end gain when the full `top_k` is returned, at the cost of one extra LLM call per search |
