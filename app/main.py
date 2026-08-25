@@ -8,7 +8,7 @@ import re
 
 import numpy as np
 from fastapi import FastAPI, Header, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import config, embed, llm, store
 
@@ -19,13 +19,21 @@ app = FastAPI(title="ActiveMemoryIndex", version="1.0.0")
 
 
 # --- contract models ---------------------------------------------------------
+# extra="allow" throughout: pydantic drops unknown fields silently, so a field
+# the caller has been sending all along would never surface anywhere. One of
+# them matters a great deal — a question timestamp would answer 42 of the 133
+# temporal questions this project cannot currently reach (see
+# bench/results/lme_temporal_baseline.md). Retaining them costs nothing and
+# note_extra() reports the names.
 class Message(BaseModel):
+    model_config = ConfigDict(extra="allow")
     role: str
     content: str
     timestamp: int | None = None
 
 
 class AddRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
     request_id: str
     messages: list[Message] = Field(min_length=1)
     user_id: str
@@ -40,10 +48,33 @@ class AddResponse(BaseModel):
 
 
 class SearchRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
     query: str
     user_id: str
     top_k: int
     options: list[str] | None = None
+
+
+_reported_extra: set[tuple[str, ...]] = set()
+
+
+def note_extra(endpoint: str, *models: BaseModel) -> None:
+    """Log the names of fields the caller sent that the contract does not name.
+
+    Names only, never values: the payload is somebody's memories, and this line
+    goes to a log file. Once per distinct set of names, so a 72-hour run does
+    not repeat itself eighteen thousand times.
+    """
+    names: set[str] = set()
+    for model in models:
+        names |= set(getattr(model, "model_extra", None) or ())
+    if not names:
+        return
+    key = (endpoint, *sorted(names))
+    if key in _reported_extra:
+        return
+    _reported_extra.add(key)
+    log.info("UNDOCUMENTED FIELDS on /%s: %s", endpoint, sorted(names))
 
 
 # --- helpers -----------------------------------------------------------------
@@ -276,6 +307,7 @@ def add(
     x_api_key: str | None = Header(default=None),
 ) -> AddResponse:
     check_auth(authorization, x_api_key)
+    note_extra("add", request, *request.messages)
     echo = AddResponse(
         success=True,
         request_id=request.request_id,
@@ -315,6 +347,7 @@ def search(
     x_api_key: str | None = Header(default=None),
 ) -> dict:
     check_auth(authorization, x_api_key)
+    note_extra("search", request)
     if request.top_k <= 0:
         return {"data": []}
     index = store.get(request.user_id)
