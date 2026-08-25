@@ -148,3 +148,50 @@ remainder on neighbours. Single-evidence questions never exhaust a hundred
 sources, so they would keep their context; multi-evidence questions would stop
 paying for context they did not ask for. That is a two-pass change to
 `select()`, and it needs an end-to-end measurement before it is worth anything.
+
+---
+
+# The breadth floor was built, measured and removed
+
+The obvious fix for a slot tax is a quota: reserve slots for distinct sources
+and let neighbours have only the remainder. It was implemented behind
+`AMI_BREADTH_FLOOR`, unit-tested against hand-computed selections, and swept.
+
+| category 1, complete@100 | floor 0 | 40 | 60 | 80 | 100 |
+|---|---:|---:|---:|---:|---:|
+| | 0.559 | 0.559 | 0.559 | 0.559 | **0.662** |
+
+Nothing moves until the quota reaches zero, where the number is *exactly* radius
+0's 0.662 — the consistency check passed, so the implementation was right and
+the idea was wrong.
+
+The reason is a miscount on our side. **Only verbatim turns have neighbours;
+extracted facts have none**, and facts are a large share of the top 100. The
+window's real spend is therefore between 20 and 40 slots, not the ~66 that
+radius 1 on a hundred slots suggests, so any quota above 40 never binds.
+
+That leaves the knob as a re-parameterisation of `AMI_WINDOW_RADIUS` and
+nothing more: at quota 0 it is radius 0, and everywhere else it is radius 1.
+It offers no third option, so it was removed rather than shipped as a second
+name for a setting that already exists.
+
+## And the adaptive version has no signal to run on
+
+A quota cannot resolve the trade-off because it applies one rule to every
+query, while the two populations want opposite rules. Per-query adaptation
+would need a free signal for "does this question need breadth or context". The
+cheapest candidate is how dispersed the top of the ranking already is:
+
+| question needs | distinct sources in top 20 | in top 50 |
+|---|---:|---:|
+| 1 evidence turn (n=264) | 14.0 | 23.0 |
+| 2 evidence turns (n=54) | 14.0 | 23.5 |
+| >=3 evidence turns (n=33) | 14.0 | 22.0 |
+
+Identical medians, overlapping quartiles (12-15 and 20-26). Source dispersion
+carries no information about how much evidence a question needs, so the
+heuristic has nothing to stand on and was not built.
+
+**Where this leaves it.** The trade-off is measured and real, the tax is
+located, and neither a global quota nor the one free signal available resolves
+it. A fix needs a discriminator this instrument has not found.
