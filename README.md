@@ -75,12 +75,16 @@ cheapest way to verify a checkout.
 
 **Publishing.** Both startup paths bind loopback. To expose the service, either
 set `AMI_BIND=0.0.0.0` and put HTTPS in front of it, or route it through an
-existing tunnel/proxy on a shared Docker network with the optional override:
+existing tunnel/proxy on a shared Docker network by naming that network:
 
 ```bash
-AMI_EDGE_NETWORK=<your proxy's network> \
-  docker compose -f docker-compose.yml -f docker-compose.edge.yml up -d
+AMI_EDGE_NETWORK=<your proxy's network> docker compose up -d
 ```
+
+One variable, no `-f`. The network is selected by NAME and is deliberately not
+declared `external`, so an absent one is created rather than fatal — which also
+means a name that matches nothing gives you an empty network and a service the
+proxy cannot reach. `docker network ls` first.
 
 **Cost.** Each Add chunk costs one `gpt-4o-mini` call (up to ~1200 completion
 tokens), and each Search one more; `AMI_AGENTIC_SEARCH=1` adds a second Search

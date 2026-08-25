@@ -6,9 +6,11 @@
 #   docker compose down         # stop
 #
 # This file is self-contained: `docker compose up -d` works on any host with
-# Docker. To publish it through an existing Cloudflare tunnel instead, add
-# docker-compose.edge.yml as an override:
-#   docker compose -f docker-compose.yml -f docker-compose.edge.yml up -d
+# Docker. To publish it through an existing Cloudflare tunnel instead, name the
+# network that tunnel is on — same command, no override file:
+#   AMI_EDGE_NETWORK=<the connector's network> docker compose up -d
+# (There used to be a `-f docker-compose.edge.yml` overlay. See the networks:
+#  block at the bottom for why an overlay is the wrong shape for this.)
 
 services:
   activememoryindex:
