@@ -100,6 +100,14 @@ RAW_FIRST = _env("AMI_RAW_FIRST", "1") != "0"
 # (.6802 / .6695 / .6763, paired p=0.16 and p=0.69); all three beat radius 0
 # (.6333) decisively. 1 is shipped because it keeps the most breadth per slot.
 WINDOW_RADIUS = _int("AMI_WINDOW_RADIUS", 1)
+# Order the returned memories oldest-first by their timestamp rather than by
+# relevance, inside whatever block RAW_FIRST has already put them in. Like
+# RAW_FIRST this changes order only, never membership. Temporal questions ask
+# which of two events came first, or how far apart they were; when the returned
+# set arrives in time order the answer is close to readable off the page,
+# whereas relevance order interleaves the two dates among a hundred other
+# memories. Off by default: it is an arm under measurement, not a finding.
+CHRONO_ORDER = _env("AMI_CHRONO_ORDER", "0") != "0"
 
 # --- memory ------------------------------------------------------------------
 # Upper bound on rows held in the per-user vector cache, across all users. The

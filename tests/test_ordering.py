@@ -118,5 +118,62 @@ with tempfile.TemporaryDirectory() as directory:
                 {i.content for i in main.neighbours(reloaded, reloaded.items[1])} == {"turn 0", "turn 2"},
                 "neighbours resolve against a reloaded index")
 
+
+# --- chronological ordering ---------------------------------------------------
+# AMI_CHRONO_ORDER makes each block arrive oldest-first. Temporal questions ask
+# which of two events came first; relevance order scatters the two dates through
+# a hundred memories, time order lets the reader read them down the page. Like
+# raw-first this must change order only, never membership.
+def dated(position, stamp):
+    return store.Item(id=f"cccccccccccccccc-r{position}", kind="raw", parent_id=None,
+                      content=f"turn {position}", created_at=stamp)
+
+
+chrono_items = [
+    dated(0, "2023-03-01T10:00:00Z"),
+    dated(1, "2023-01-05T10:00:00Z"),
+    dated(2, "2023-02-10T10:00:00Z"),
+    store.Item(id="cccccccccccccccc-r3", kind="raw", parent_id=None,
+               content="undated turn", created_at=None),
+    store.Item(id="cccccccccccccccc-f0", kind="fact", parent_id=None,
+               content="dated fact (later)", created_at="2023-04-01T10:00:00Z"),
+    store.Item(id="cccccccccccccccc-f1", kind="fact", parent_id=None,
+               content="dated fact (earlier)", created_at="2023-01-01T10:00:00Z"),
+    store.Item(id="cccccccccccccccc-f2", kind="fact", parent_id=None,
+               content="undated fact", created_at=None),
+]
+chrono_index = store.UserIndex()
+chrono_index.append(chrono_items, np.zeros((len(chrono_items), 4), dtype=np.float32))
+# Relevance deliberately disagrees with time: the newest turn scores highest.
+chrono_scores = np.array([0.90, 0.50, 0.70, 0.60, 0.95, 0.55, 0.65], dtype=np.float32)
+
+saved = (config.CHRONO_ORDER, config.WINDOW_RADIUS, config.RAW_FIRST)
+config.WINDOW_RADIUS = 0
+
+config.CHRONO_ORDER = False
+by_relevance = [item.content for item, _ in main.select(chrono_index, chrono_scores, 7)]
+config.CHRONO_ORDER = True
+by_time = [item.content for item, _ in main.select(chrono_index, chrono_scores, 7)]
+config.CHRONO_ORDER, config.WINDOW_RADIUS, config.RAW_FIRST = saved
+
+ok &= check(by_relevance[:4] == ["turn 0", "turn 2", "undated turn", "turn 1"],
+            "without the switch the raw block is in relevance order")
+
+# The four groups, in order: dated turns oldest-first, undated turns, dated
+# facts oldest-first, undated facts. Two successive stable sorts would NOT
+# produce this if raw-first ran first and time ran second — a stable chain puts
+# the least significant key first, so the second pass would win and turns and
+# facts would interleave by date. One composite key, raw-first major, keeps the
+# blocks whole.
+ok &= check(by_time == ["turn 1", "turn 2", "turn 0", "undated turn",
+                        "dated fact (earlier)", "dated fact (later)", "undated fact"],
+            "four blocks: dated turns, undated turns, dated facts, undated facts")
+ok &= check(by_time.index("undated turn") < by_time.index("dated fact (earlier)"),
+            "raw-first outranks the timestamp: an undated turn still beats a dated fact")
+ok &= check(by_time.index("turn 0") < by_time.index("undated turn"),
+            "an undated memory sorts to the end of its block, not the front")
+ok &= check(sorted(by_time) == sorted(by_relevance),
+            "chronological ordering changes the order, never the membership")
+
 print("\nOK" if ok else "\nFAILED")
 sys.exit(0 if ok else 1)

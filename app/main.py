@@ -193,12 +193,22 @@ def select(index: store.UserIndex, scores: np.ndarray, top_k: int) -> list[tuple
                 break
         if full:
             break
-    if config.RAW_FIRST:
+    if config.RAW_FIRST or config.CHRONO_ORDER:
         # Verbatim turns first, extracted facts after, each block keeping its
         # relevance order. This step reorders, it never adds or drops — but
         # the reader attends to the head of the context, and a verbatim turn is
         # the primary source while a fact is a lossy paraphrase of it.
-        chosen.sort(key=lambda pair: pair[0].kind != "raw")
+        #
+        # With CHRONO_ORDER the second key is the timestamp, so each block
+        # arrives oldest-first. created_at is ISO-8601 UTC, so string order is
+        # time order; an undated memory sorts to the end of its block rather
+        # than to the front, where it would break the run of dates the reader
+        # is meant to read down. Python's sort is stable, so anything tied on
+        # both keys keeps its relevance order.
+        chosen.sort(key=lambda pair: (
+            (pair[0].kind != "raw") if config.RAW_FIRST else False,
+            (pair[0].created_at or "9999") if config.CHRONO_ORDER else "",
+        ))
     return chosen
 
 
@@ -324,24 +334,18 @@ def search(
             if ref_question:
                 scores2 = rank(index, request.query, request.options,
                                recall_question=ref_question)
-                chosen2 = select(index, scores2, request.top_k)
-                # Merge: combine, deduplicate by content key, keep best score
-                merged: dict[str, tuple[store.Item, float]] = {}
-                for item, score in chosen1 + chosen2:
-                    key = " ".join(item.content.lower().split())[:120]
-                    if key not in merged or score > merged[key][1]:
-                        merged[key] = (item, score)
-                # Re-sort, then re-apply BOTH caps. Slicing on RETURN_LIMIT
-                # alone let the merged set exceed top_k — a contract violation.
-                merged_sorted = sorted(merged.values(), key=lambda x: -x[1])
-                limit = min(request.top_k, config.RETURN_LIMIT)
-                budget = config.RETURN_CHAR_BUDGET
-                chosen1 = []
-                for item, score in merged_sorted:
-                    if len(chosen1) >= limit or budget <= 0:
-                        break
-                    budget -= len(item.content)
-                    chosen1.append((item, score))
+                # Fuse the two rounds at the score level, then run the ordinary
+                # selection once. Merging two already-selected lists instead
+                # re-sorted them by score, which silently undid raw-first, and
+                # applied a looser character budget than select() does — so
+                # turning this switch on changed three things at once and the
+                # arm could not be read. Now it changes what is scored, and
+                # nothing else.
+                #
+                # Element-wise max, not mean: the second question exists to
+                # reach evidence the first one missed, and averaging would
+                # dilute exactly those items back below the cut.
+                chosen1 = select(index, np.maximum(scores1, scores2), request.top_k)
 
     data = [
         {
