@@ -279,6 +279,39 @@ def report(args) -> None:
         values = by_category[category]
         print(f"    category {category}: {sum(values)/len(values):.3f}  (n={len(values)})")
 
+    # Completeness. Every number above counts a question as retrieved when ANY
+    # one of its evidence turns is in the top k, which cannot tell "found one of
+    # the two events" from "found both" — and on a multi-hop or temporal
+    # question that difference is the whole question. 26.8% of LoCoMo questions
+    # need two or more evidence turns (97.9% of category 1, 49.0% of category
+    # 3), so the two metrics come apart exactly where it matters.
+    print("  k     complete  (a question counts only when EVERY evidence turn is inside the top k)")
+    for k in cutoffs:
+        hits = 0
+        for row in scored:
+            gold = set(row["evidence"])
+            covered = set().union(*(item_dias(e["id"], chunks) for e in row["ranked"][:k])) if row["ranked"][:k] else set()
+            if gold <= covered:
+                hits += 1
+        print(f"  {k:<5} {hits/len(scored):.3f}   ({hits}/{len(scored)})")
+    print("  complete@100 by LoCoMo category (and by how much evidence the question needs):")
+    complete_by: dict[int, list[int]] = {}
+    complete_by_n: dict[str, list[int]] = {}
+    for row in scored:
+        gold = set(row["evidence"])
+        covered = set().union(*(item_dias(e["id"], chunks) for e in row["ranked"][:100])) if row["ranked"][:100] else set()
+        done = int(gold <= covered)
+        complete_by.setdefault(row["category"], []).append(done)
+        bucket = "1 turn" if len(gold) == 1 else ("2 turns" if len(gold) == 2 else ">=3 turns")
+        complete_by_n.setdefault(bucket, []).append(done)
+    for category in sorted(complete_by):
+        values = complete_by[category]
+        print(f"    category {category}: {sum(values)/len(values):.3f}  (n={len(values)})")
+    for bucket in ("1 turn", "2 turns", ">=3 turns"):
+        values = complete_by_n.get(bucket)
+        if values:
+            print(f"    needs {bucket:9s}: {sum(values)/len(values):.3f}  (n={len(values)})")
+
 
 def sweep(args) -> None:
     """The return-limit sweep: accuracy and its decomposition at every prefix.
@@ -351,13 +384,40 @@ def sweep(args) -> None:
 
 
 # --- end-to-end layer --------------------------------------------------------
+def _placeholder_httpx() -> None:
+    """Let the platform's pipeline import without its HTTP client installed.
+
+    Their pipeline.py imports httpx at module level for its own answer and
+    evaluate commands. This harness imports the module only for its prompt
+    templates and never calls those commands, so a placeholder is enough — and
+    it keeps the prompts in their repository instead of copied into this one,
+    which is the rule this harness is built around. Neither machine this runs
+    on has httpx, or pip to install it with.
+    """
+    import types
+    if "httpx" in sys.modules:
+        return
+    try:
+        import httpx  # noqa: F401
+    except ModuleNotFoundError:
+        sys.modules["httpx"] = types.ModuleType("httpx")
+
+
 def platform_pipeline():
-    path = THIRD / "agent-memory-leaderboard" / "locomo-refined" / "pipeline.py"
-    spec = importlib.util.spec_from_file_location("locomo_pipeline", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.path.insert(0, str(path.parent.parent))
-    spec.loader.exec_module(module)
-    return module
+    # Upstream moved the per-benchmark pipelines under `data/` after this
+    # project first cloned them; the old path now resolves to nothing, so both
+    # layouts are tried and a missing file fails loudly instead of at import.
+    _placeholder_httpx()
+    root = THIRD / "agent-memory-leaderboard"
+    for path in (root / "data" / "locomo-refined" / "pipeline.py",
+                 root / "locomo-refined" / "pipeline.py"):
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location("locomo_pipeline", path)
+            module = importlib.util.module_from_spec(spec)
+            sys.path.insert(0, str(path.parents[2]))
+            spec.loader.exec_module(module)
+            return module
+    raise SystemExit(f"no locomo-refined pipeline.py under {root}; run bench/fetch.sh")
 
 
 def completer(model: str, base_url: str | None, api_key: str, args_max_tokens: int = 1024):
