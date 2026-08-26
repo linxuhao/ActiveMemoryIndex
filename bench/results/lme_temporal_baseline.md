@@ -306,3 +306,66 @@ we can reach it, or downstream, where we cannot?
 `multi-session` first: B is the second-weakest axis, all 133 of its questions
 need two or more sessions, and if *its* loss is retrieval-side then that is
 where September belongs.
+
+---
+
+# Computing the arithmetic instead of asking for it
+
+The failures above are subtractions the answer model performs in its head over
+calendar dates, and gets wrong: 30 days returned as 29, two months as one,
+eight weeks as three. The dates are stored in ISO form, so the subtraction can
+be done exactly in code and handed over as integers. `AMI_DAY_INDEX` numbered
+each returned memory by the day it falls on, counting from the earliest memory
+in the returned set, rendered beside the timestamp:
+
+    [2023-03-15 08:09 · day 33] I: ...
+
+Retrieval is untouched — `all-chunks` stays at 1.000 — and 12,317 rendered day
+numbers were audited against their own dates with **zero inconsistencies**.
+
+| | base | base2 | day index |
+|---|---:|---:|---:|
+| accuracy | 0.429 (57) | 0.444 (59) | 0.451 (60) |
+| discordant vs base | — | 8 | 11 |
+
+Inside the noise floor, and **not shipped**. But the two sides of it are not
+noise, and they point in opposite directions.
+
+## What it fixed was exactly what it was built to fix
+
+| question | gold | base | day index |
+|---|---|---|---|
+| days between the Sunday mass and the Ash Wednesday service | 30 (31 accepted) | 29 | **31** |
+| days between buying the gift and the graduation ceremony | 7 (8 accepted) | 21 | **7** |
+
+## What it broke was an entire class
+
+Three of the four regressions are "which happened first", and all three flipped
+to the wrong order. The reason is visible in the returned text:
+
+    [2023-05-09 12:13 · day 1] I: ... especially after attending the pride parade ...
+    [2023-05-09 12:14 · day 1] Assistant: ... attending the pride parade on May 1st ...
+    [2023-05-09 08:01 · day 1] I: ... my mentor, Rachel, who I had a meeting with on April 10th ...
+
+**The index numbers the utterance, not the event.** The user recounted both
+events on one day, so every memory carries the same `day 1` while the dates
+that actually order them — April 10th and May 1st — sit in the prose. Without
+the index the model read those dates and answered correctly. With it, it
+believed the number.
+
+TIDE-Mem's extraction prompt draws the distinction this missed: *"Use message
+timestamps as utterance times and resolve relative dates only when
+unambiguous."* An event-time index would have to come from the extraction step,
+not from the envelope, and that is a different mechanism from this one.
+
+## The pattern across two arms
+
+| arm | what it made salient | result |
+|---|---|---|
+| `qdate-reader` | a current date in the question frame | +26.5 pp where the present is needed, **-14.3 pp everywhere else** |
+| `dayidx` | a numeric day beside every timestamp | fixes genuine subtractions, **breaks ordering questions whose dates are in the prose** |
+
+Twice now, making one time anchor more prominent has cost more than it bought
+on the questions whose real anchors are inside the text. The model transfers
+its trust to whatever is formatted most authoritatively. That is a constraint
+on this whole family of interventions, not two unrelated regressions.
