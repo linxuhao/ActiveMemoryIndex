@@ -119,6 +119,44 @@ def stamp(timestamp: int | None) -> tuple[str | None, str]:
     return moment.isoformat().replace("+00:00", "Z"), moment.strftime("[%Y-%m-%d %H:%M] ")
 
 
+STAMPED = re.compile(r"^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\] ")
+
+
+def event_indexed(items: list[store.Item]) -> dict[str, str]:
+    """Map item id -> content re-rendered with the event's date and day number.
+
+    Only memories the reader could actually date are touched. A memory it
+    declined to date is left exactly as it was: an index on everything, when
+    everything shares an utterance date, is what broke ordering questions the
+    last time this was tried.
+    """
+    stamped = [(item, match) for item in items for match in [STAMPED.match(item.content)] if match]
+    if not stamped:
+        return {}
+    found: dict[int, str] = {}
+    for start in range(0, len(stamped), config.EVENT_BATCH):
+        block = stamped[start: start + config.EVENT_BATCH]
+        batch = [(m.group(1), item.content[m.end():]) for item, m in block]
+        for offset, iso in llm.event_dates(batch).items():
+            found[start + offset] = iso
+
+    dated = []
+    for position, iso in found.items():
+        try:
+            dated.append((position, dt.date.fromisoformat(iso)))
+        except ValueError:
+            continue
+    if not dated:
+        return {}
+    first = min(day for _, day in dated)
+    out: dict[str, str] = {}
+    for position, day in dated:
+        item, match = stamped[position]
+        out[item.id] = (f"[said {match.group(1)} {match.group(2)} \u00b7 happened {day.isoformat()} "
+                        f"\u00b7 day {(day - first).days + 1}] " + item.content[match.end():])
+    return out
+
+
 def build_items(request: AddRequest) -> tuple[list[store.Item], str]:
     """Raw messages (verbatim, timestamped) plus the chunk text handed to the LLM."""
     items: list[store.Item] = []
@@ -380,10 +418,13 @@ def search(
                 # dilute exactly those items back below the cut.
                 chosen1 = select(index, np.maximum(scores1, scores2), request.top_k)
 
+    # Re-rendered on the way out; the stored text is never rewritten, so turning
+    # this off returns exactly what it returned before.
+    redated = event_indexed([item for item, _ in chosen1]) if config.EVENT_DATES else {}
     data = [
         {
             "id": item.id,
-            "content": item.content,
+            "content": redated.get(item.id, item.content),
             "score": score,
             **({"created_at": item.created_at} if item.created_at else {}),
         }

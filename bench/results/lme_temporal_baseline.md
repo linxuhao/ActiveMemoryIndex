@@ -369,3 +369,97 @@ Twice now, making one time anchor more prominent has cost more than it bought
 on the questions whose real anchors are inside the text. The model transfers
 its trust to whatever is formatted most authoritatively. That is a constraint
 on this whole family of interventions, not two unrelated regressions.
+
+---
+
+# Reading the time, computing the arithmetic
+
+The day-index arm failed because a regular expression on the envelope can only
+see the utterance date. Finding a time in free text is reading — "the day of my
+graduation" contains no digits — so `AMI_EVENT_DATES` asks `gpt-4o-mini` when
+each returned memory's event actually happened, given the date it was said, and
+the day numbers are then computed in code from what comes back.
+
+Only memories the reader could date are touched; one it declines is returned
+exactly as before. That is the correction to the previous arm, which numbered
+everything and so put the same authoritative `day 1` on two memories describing
+events a month apart.
+
+    [said 2023-05-09 08:01 · happened 2023-04-10 · day 1] I: my mentor Rachel, who I met on April 10th
+
+## Four runs of each arm
+
+| | runs | mean | range |
+|---|---|---:|---|
+| base | 57, 58, 59, 60 | 58.50 | [57, 60] |
+| **event dates** | 62, 63, 65, 67 | **64.25** | [62, 67] |
+
+Complete separation — the worst run of one arm beats the best run of the other.
+Exact permutation test, 4 against 4, two-sided: **p = 0.029**.
+
+## Where the gain lands, and where it does not
+
+| subset | n | base (four runs) | event dates (four runs) | difference |
+|---|---:|---|---|---:|
+| needs a current date | 49 | 14, 14, 15, 15 | 14, 14, 14, 16 | **+0.00** |
+| does not | 84 | 43, 43, 45, 45 | 48, 49, 51, 51 | **+5.75** |
+
+Every question of the gain is in the subset the mechanism addresses, and the
+subset it cannot help — the questions that need a present this system is not
+given — is unmoved to two decimal places over eight runs. An intervention that
+moves only its target population is a different kind of evidence from one that
+moves a total.
+
+## Why the per-question test disagrees, and which to believe
+
+Scoring each question by whether three of four runs got it right gives 7 fixed
+against 5 broken, sign test p = 0.77. That is not a contradiction; it is
+binarisation throwing the signal away. The effect is a shift in probability, not
+a set of deterministic flips:
+
+| change in correct-run count | -4 | -2 | -1 | 0 | +1 | +2 | +3 | +4 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| questions | 1 | 3 | 3 | **110** | 6 | 3 | 4 | 3 |
+
+110 of 133 questions never move. Sixteen improve, seven worsen. A Wilcoxon
+signed-rank test over the 23 that moved, which does not discard the magnitudes:
+**z = 1.95, p = 0.052**.
+
+Two tests that use the data differently agree in direction and land either side
+of 0.05. Read together with the specificity above, this is the one arm measured
+in this cycle that survived its pre-registered criteria.
+
+## What it is not
+
++4.3 points on one question type of one dataset under a local judge, with 110
+of 133 questions untouched. This instrument reads about 2.5x the platform's
+axis C, so nothing here converts to a leaderboard number. It is a real, modest
+effect whose direction should transfer; the magnitude should not be quoted.
+
+## Two failures it fixed, in its own words
+
+| question | gold | base | event dates |
+|---|---|---|---|
+| days between the Sunday mass and the Ash Wednesday service | 30 | 29 | **30** |
+| days taken to finish 'The Nightingale' | 21 | **1 day** | **21 days** |
+
+Three of the four ordering questions the day-index arm broke are recovered.
+
+## Where it belongs, which is not where it was measured
+
+Measured at search time to avoid a re-ingest, and it must not ship there. Each
+search spends about five extra LLM calls, the retrieval stage goes from seconds
+to 2m45s for 133 questions, and a formal run of 4,871 searches would add roughly
+24,000 calls whose serial tail runs at the Cloudflare edge's ~100-second cut.
+Worse, a memory returned by twenty questions is dated twenty times.
+
+Only 10.1% of returned memories receive a date at all, though 68.2% of those
+differ from the utterance date — the reader is doing real work on a small
+fraction of a large payload.
+
+**Add is where this belongs, and it is free there.** Every chunk already costs
+one extraction call; asking that same call for event dates adds no calls at all,
+prices the work once instead of once per retrieval, and removes the latency
+question entirely. It needs a column on `items`, a longer extraction prompt, and
+a re-ingest — and it is a different mechanism from the one measured here, so it
+has to be measured again rather than assumed to carry the same +4.3.

@@ -64,6 +64,7 @@ LLM_CONCURRENCY = _int("AMI_LLM_CONCURRENCY", 40)
 # against one. gpt-4o-mini never needs the headroom, and unused caps cost nothing.
 LLM_MAX_TOKENS_EXTRACT = _int("AMI_LLM_MAX_TOKENS_EXTRACT", 1200)
 LLM_MAX_TOKENS_QUERY = _int("AMI_LLM_MAX_TOKENS_QUERY", 200)
+LLM_MAX_TOKENS_EVENTS = _int("AMI_LLM_MAX_TOKENS_EVENTS", 900)
 
 # Feature switches: with no API key both fall back to the raw-text-only path.
 EXTRACT_ENABLED = _env("AMI_EXTRACT", "1") != "0"
@@ -100,6 +101,20 @@ RAW_FIRST = _env("AMI_RAW_FIRST", "1") != "0"
 # (.6802 / .6695 / .6763, paired p=0.16 and p=0.69); all three beat radius 0
 # (.6333) decisively. 1 is shipped because it keeps the most breadth per slot.
 WINDOW_RADIUS = _int("AMI_WINDOW_RADIUS", 1)
+
+# Ask the model when each returned memory's event actually happened, then do
+# the arithmetic in code.
+#
+# Numbering memories by their own timestamp was measured and rejected: it
+# indexes the utterance, not the event, so a user recounting two events in one
+# sitting gets the same number on both and the model believes the number over
+# the dates in the prose. Finding a time in free text is reading — "the day of
+# my graduation" has no digits in it — so the reader does that part, and the
+# subtraction, which it does badly, is done here.
+#
+# Costs one LLM call per EVENT_BATCH returned memories, on every search.
+EVENT_DATES = _env("AMI_EVENT_DATES", "0") != "0"
+EVENT_BATCH = _int("AMI_EVENT_BATCH", 20)
 # Order the returned memories oldest-first by their timestamp rather than by
 # relevance, inside whatever block RAW_FIRST has already put them in. Like
 # RAW_FIRST this changes order only, never membership. Temporal questions ask

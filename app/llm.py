@@ -167,6 +167,64 @@ is ONE targeted recall question in the user's own first-person voice that would 
 Return JSON only."""
 
 
+EVENT_DATE_SYSTEM = """You read memories from a personal memory index and say WHEN the event each one describes actually happened.
+
+Each memory is given as `N | <the date and time it was said> | <text>`.
+
+The date it was said is not the date it happened. "I went to the museum yesterday"
+said on 2023-05-09 happened on 2023-05-08. "I met Rachel on April 10th" said on
+2023-05-09 happened on 2023-04-10. A memory that describes something ongoing, a
+plan, a preference or no event at all has no event date.
+
+For each memory return the date the described event happened, as YYYY-MM-DD, or
+null when the text does not pin one down. Do not guess: null is the right answer
+whenever the text and the said-date together do not fix a specific day.
+
+Return JSON only, of the form {"0": "2023-04-10", "1": null, ...}, one key per
+memory number you were given."""
+
+
+def event_dates(memories: list[tuple[str, str]]) -> dict[int, str]:
+    """Ask when each memory's event happened. Returns {position: YYYY-MM-DD}.
+
+    A regular expression can find "2023-04-10" but not "the day of my
+    graduation", and it cannot tell an utterance date from an event date at
+    all — numbering memories by the envelope's timestamp was measured to break
+    ordering questions, because a user recounting two events in one sitting
+    gives every memory the same day. Finding the time is reading, so a reader
+    does it; the arithmetic afterwards is exact, so code does that.
+
+    Failure is silent and total for the batch: no dates is the same as no
+    feature, which is the behaviour without a key.
+    """
+    if not config.llm_available() or not memories:
+        return {}
+    lines = "\n".join(f"{i} | {said} | {text[:300]}" for i, (said, text) in enumerate(memories))
+    raw = _complete(EVENT_DATE_SYSTEM, lines, config.LLM_MAX_TOKENS_EVENTS)
+    if not raw:
+        return {}
+    try:
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not match:
+            return {}
+        payload = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return {}
+    out: dict[int, str] = {}
+    for key, value in payload.items():
+        if not isinstance(value, str):
+            continue
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value.strip()):
+            continue
+        try:
+            position = int(key)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= position < len(memories):
+            out[position] = value.strip()
+    return out
+
+
 def reflect_gap(query: str, options: list[str] | None, top_memories: list[str]) -> dict | None:
     """Check whether retrieved evidence is complete; if not, produce a targeted
     follow-up recall question.  Returns None on failure (degrade gracefully)."""
