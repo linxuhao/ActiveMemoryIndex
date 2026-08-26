@@ -195,3 +195,79 @@ heuristic has nothing to stand on and was not built.
 **Where this leaves it.** The trade-off is measured and real, the tax is
 located, and neither a global quota nor the one free signal available resolves
 it. A fix needs a discriminator this instrument has not found.
+
+---
+
+# Reserving slots for a second hop
+
+`AMI_AGENTIC_SEARCH` fires a second, reflected retrieval and fuses the two
+rounds into one score. On multi-hop questions it fired on 51 of 68 and changed
+the returned set — and the share receiving all their evidence stayed at exactly
+38 of 68. Whatever the second round finds still has to out-rank the first
+round's hundred, and the evidence these questions miss sits at a median rank of
+213. A fused score does not move something two hundred places.
+
+`AMI_HOP2_SLOTS` reserves places instead: the first round takes
+`RETURN_LIMIT` minus the reservation, the second fills the rest from what the
+first did not take.
+
+| complete@100 | base | agentic (fused) | hop2=15 | hop2=30 |
+|---|---:|---:|---:|---:|
+| category 1 — multi-hop (68) | 0.559 | **0.559** | 0.632 | **0.647** |
+| needs >=3 evidence turns (33) | 0.303 | 0.364 | 0.394 | **0.424** |
+| needs 2 evidence turns (54) | 0.741 | 0.741 | 0.778 | **0.815** |
+| needs 1 evidence turn (264) | 0.920 | 0.936 | 0.943 | 0.939 |
+| category 4 — single-hop (197) | 0.929 | 0.944 | 0.944 | **0.949** |
+| all (351) | 0.835 | 0.852 | 0.866 | **0.872** |
+
+The two arms differ in one thing — whether the second round competes for the
+first round's places — so the six category-1 questions are attributable to the
+reservation alone.
+
+Note what it does *not* cost. Single-evidence questions rise rather than fall,
+where the window's trade took them down. Reserving slots reaches the
+multi-evidence number that `WINDOW_RADIUS=0` reaches (0.424 on >=3 turns) while
+single-evidence questions stay at 0.939 instead of falling to 0.898. It is the
+good half of that trade without the other half.
+
+## End to end, which is what decides it
+
+| | complete evidence | accuracy |
+|---|---:|---:|
+| base | 293/351 | 0.627 (220/351) |
+| hop2=30 | **306/351** | 0.635 (223/351) |
+
+**Thirteen more questions received all of their evidence and three more were
+answered correctly.** 23 discordant pairs on 351, about 6.6%, which is the
+noise this instrument has shown elsewhere. The end-to-end difference is not
+readable.
+
+The decomposition is clean, which is why the number is believable rather than
+merely small:
+
+| | n | base | hop2 |
+|---|---:|---:|---:|
+| both arms had complete evidence | 290 | 0.714 | 0.717 |
+| neither did | 42 | 0.190 | 0.190 |
+| hop2 gained complete evidence | 16 | 4 right | **7 right** |
+| hop2 lost it | 3 | 1 right | 0 right |
+
+Nothing is disturbed where the evidence did not change. The whole effect sits
+in the sixteen questions that gained it, and **only three of those sixteen
+converted**.
+
+## The same wall as the temporal axis
+
+On LongMemEval temporal-reasoning every question receives all of its evidence
+and 43.2% are answered correctly. Here, thirteen questions gain all of theirs
+and three more come out right. Both axes say the same thing: a retrieval
+improvement is discounted heavily by what the reader does with it, and the
+reader is the binding constraint on both.
+
+**Not shipped.** One extra LLM call per search for +0.9 pp that this instrument
+cannot separate from noise. It would need replicates to justify, and the
+coverage result is strong enough that they are worth running before September.
+
+One real uncertainty this harness cannot settle: the platform's judge model is
+undisclosed. If it converts evidence into answers better than the local judge
+does, +3.7 points of coverage is worth more there than it is here.

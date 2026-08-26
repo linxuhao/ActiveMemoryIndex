@@ -86,6 +86,21 @@ RETURN_CHAR_BUDGET = _int("AMI_RETURN_CHAR_BUDGET", 400000)
 # evidence is complete and may fire a second targeted recall question. Each
 # round costs one extra LLM call + one extra embed pass.
 AGENTIC_SEARCH = _env("AMI_AGENTIC_SEARCH", "0") != "0"
+
+# Slots held back from the first retrieval and given to a second, reflected one.
+#
+# AMI_AGENTIC_SEARCH already runs a second round, and on LoCoMo multi-hop
+# questions it fired on 51 of 68 and changed the returned set — while the share
+# of questions receiving all their evidence stayed at exactly 38 of 68. It fuses
+# the two rounds into one score and selects once, so whatever the second round
+# finds must still out-rank the first round's hundred. The evidence those
+# questions are missing sits at a median rank of 213, and a fused score does not
+# move it two hundred places.
+#
+# This reserves slots instead: the first round gets RETURN_LIMIT minus this many
+# and the second round fills the rest from what the first did not already take.
+# 0 leaves the single-round behaviour.
+HOP2_SLOTS = _int("AMI_HOP2_SLOTS", 0)
 # Order the returned memories verbatim-turns-first, extracted-facts-second,
 # each block still in relevance order. This changes only the order of the set
 # already selected, never which memories are returned.

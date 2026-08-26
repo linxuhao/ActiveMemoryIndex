@@ -25,7 +25,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_bench import CHUNK_MESSAGES, OUT, THIRD, _placeholder_httpx, chunk_hash, post  # noqa: E402
+from run_bench import (CHUNK_MESSAGES, OUT, THIRD, _placeholder_httpx, chunk_hash,  # noqa: E402
+                       completer, post)
 
 DATE_FORMAT = "%Y/%m/%d (%a) %H:%M"
 ITEM_ID = re.compile(r"([0-9a-f]{16})-([rf])(\d+)")
@@ -51,44 +52,6 @@ def platform_pipeline(benchmark: str = "longmemeval-s"):
             spec.loader.exec_module(module)
             return module
     raise SystemExit(f"no pipeline.py for {benchmark}; run bench/fetch.sh")
-
-
-def completer(model: str, base_url: str | None, api_key: str, max_tokens: int = 256):
-    """Chat completions over the standard library.
-
-    run_bench uses the openai SDK; neither machine this harness runs on has it,
-    and neither has pip. The service calls in run_bench already go through
-    urllib, so the answer and judge stages do too. Backoff is long enough to
-    ride out a per-minute limit, and the final failure RAISES — the caller
-    decides what a failure means, never a silent empty string.
-    """
-    import time as _time
-    import urllib.error
-    import urllib.request
-
-    endpoint = (base_url or "https://api.openai.com/v1").rstrip("/") + "/chat/completions"
-
-    def complete(prompt: str) -> str:
-        payload = json.dumps({
-            "model": model, "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0, "max_tokens": max_tokens,
-        }).encode("utf-8")
-        last: Exception | None = None
-        for attempt in range(6):
-            request = urllib.request.Request(
-                endpoint, data=payload, method="POST",
-                headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-            )
-            try:
-                with urllib.request.urlopen(request, timeout=600) as response:
-                    body = json.loads(response.read())
-                return (body["choices"][0]["message"]["content"] or "").strip()
-            except Exception as error:  # noqa: BLE001
-                last = error
-                _time.sleep(min(5 * 2 ** attempt, 120))
-        raise RuntimeError(f"completion failed after 6 attempts: {last}")
-
-    return complete
 
 
 def epoch_ms(stamp: str) -> int:

@@ -421,31 +421,48 @@ def platform_pipeline():
 
 
 def completer(model: str, base_url: str | None, api_key: str, args_max_tokens: int = 1024):
-    """Completion helper with explicit exponential backoff.
+    """Chat completions over the standard library.
 
-    Lesson from the 2026-08-06 incident: the SDK's own retries exhaust within
-    seconds under a daily-quota 429, hundreds of calls then fail silently, and
-    empty answers judged WRONG masquerade as a dilution effect. Backoff here is
-    long enough to ride out per-minute limits, and the final failure RAISES —
-    the caller decides what a failure means, never a silent empty string.
+    This used to go through the openai SDK. Neither machine this harness runs
+    on has it, or pip to install it with, so every `answer` invocation died at
+    the import — under a shell redirect that swallowed the traceback, which is
+    how it stayed broken without anyone noticing. The service calls above
+    already go through urllib; so does this.
+
+    Lesson from the 2026-08-06 incident, which the SDK version carried and this
+    one keeps: retries that exhaust within seconds under a daily-quota 429 let
+    hundreds of calls fail silently, and empty answers judged WRONG masquerade
+    as a dilution effect. Backoff here is long enough to ride out a per-minute
+    limit, and the final failure RAISES — the caller decides what a failure
+    means, never a silent empty string.
     """
     import time as _time
+    import urllib.error
+    import urllib.request
 
-    from openai import OpenAI
-
-    client = OpenAI(api_key=api_key or "none", base_url=base_url, timeout=600, max_retries=0)
-
+    if not api_key:
+        # Six retries times several hundred questions is a long way to discover
+        # that nobody set a key, and the empty answers it leaves behind read as
+        # a model that would not answer.
+        raise SystemExit("no API key: set BENCH_API_KEY or OPENAI_API_KEY (bench/.env is read automatically)")
+    endpoint = (base_url or "https://api.openai.com/v1").rstrip("/") + "/chat/completions"
     reasoning = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
     def complete(prompt: str) -> str:
+        payload = json.dumps({
+            "model": model, "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0, "max_tokens": args_max_tokens,
+        }).encode("utf-8")
         last: Exception | None = None
         for attempt in range(6):
+            request = urllib.request.Request(
+                endpoint, data=payload, method="POST",
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+            )
             try:
-                response = client.chat.completions.create(
-                    model=model, messages=[{"role": "user", "content": prompt}], temperature=0,
-                    max_tokens=args_max_tokens,
-                )
-                text = reasoning.sub("", response.choices[0].message.content or "")
+                with urllib.request.urlopen(request, timeout=600) as response:
+                    body = json.loads(response.read())
+                text = reasoning.sub("", body["choices"][0]["message"]["content"] or "")
                 return "" if "<think>" in text else text.strip()
             except Exception as error:  # noqa: BLE001
                 last = error
@@ -564,7 +581,13 @@ def main() -> None:
         parser.add_argument("--prefix", type=int, default=100)
         parser.add_argument("--model", default=os.environ.get("BENCH_MODEL", "gpt-4o-mini"))
         parser.add_argument("--base-url", default=os.environ.get("BENCH_BASE_URL") or None)
-        parser.add_argument("--api-key", default=os.environ.get("BENCH_API_KEY", ""))
+        # BENCH_API_KEY exists so the answer/judge layer can use a different
+        # provider from the service. Falling back to OPENAI_API_KEY matters
+        # because .env sets that one: without the fallback every call 401s, the
+        # completer burns its whole backoff on each question, and answer()
+        # writes 351 empty strings that look like a model refusing to answer.
+        parser.add_argument("--api-key", default=os.environ.get("BENCH_API_KEY")
+                            or os.environ.get("OPENAI_API_KEY", ""))
         parser.add_argument("--max-tokens", type=int, default=int(os.environ.get("BENCH_MAX_TOKENS", 1024)))
         parser.set_defaults(run=function)
 

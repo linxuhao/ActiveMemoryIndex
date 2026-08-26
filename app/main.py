@@ -229,16 +229,33 @@ def neighbours(index: store.UserIndex, item: store.Item) -> list[store.Item]:
     return out
 
 
-def select(index: store.UserIndex, scores: np.ndarray, top_k: int) -> list[tuple[store.Item, float]]:
-    limit = min(top_k, config.RETURN_LIMIT)
+def content_key(item: store.Item) -> str:
+    return " ".join(item.content.lower().split())[:120]
+
+
+def order(chosen: list[tuple[store.Item, float]]) -> None:
+    """Sort the selected set in place. Reorders, never adds or drops."""
+    if config.RAW_FIRST or config.CHRONO_ORDER:
+        chosen.sort(key=lambda pair: (
+            (pair[0].kind != "raw") if config.RAW_FIRST else False,
+            (pair[0].created_at or "9999") if config.CHRONO_ORDER else "",
+        ))
+
+
+def select(index: store.UserIndex, scores: np.ndarray, top_k: int,
+           limit_override: int | None = None, exclude: set[str] | None = None,
+           budget_override: int | None = None) -> list[tuple[store.Item, float]]:
+    limit = min(top_k, config.RETURN_LIMIT) if limit_override is None else limit_override
     chosen: list[tuple[store.Item, float]] = []
-    seen: set[str] = set()
-    budget = config.RETURN_CHAR_BUDGET
+    seen: set[str] = set(exclude or ())
+    budget = config.RETURN_CHAR_BUDGET if budget_override is None else budget_override
+    if limit <= 0 or budget <= 0:
+        return chosen
 
     def take(item: store.Item, score: float) -> bool:
         """Append one memory if it is new and affordable. True when full."""
         nonlocal budget
-        key = " ".join(item.content.lower().split())[:120]
+        key = content_key(item)
         if key in seen:
             return False
         if len(item.content) > budget and chosen:
@@ -262,22 +279,10 @@ def select(index: store.UserIndex, scores: np.ndarray, top_k: int) -> list[tuple
                 break
         if full:
             break
-    if config.RAW_FIRST or config.CHRONO_ORDER:
-        # Verbatim turns first, extracted facts after, each block keeping its
-        # relevance order. This step reorders, it never adds or drops — but
-        # the reader attends to the head of the context, and a verbatim turn is
-        # the primary source while a fact is a lossy paraphrase of it.
-        #
-        # With CHRONO_ORDER the second key is the timestamp, so each block
-        # arrives oldest-first. created_at is ISO-8601 UTC, so string order is
-        # time order; an undated memory sorts to the end of its block rather
-        # than to the front, where it would break the run of dates the reader
-        # is meant to read down. Python's sort is stable, so anything tied on
-        # both keys keeps its relevance order.
-        chosen.sort(key=lambda pair: (
-            (pair[0].kind != "raw") if config.RAW_FIRST else False,
-            (pair[0].created_at or "9999") if config.CHRONO_ORDER else "",
-        ))
+    # Verbatim turns first, extracted facts after, each block keeping its
+    # relevance order — the reader attends to the head of the context, and a
+    # verbatim turn is the primary source while a fact is a lossy paraphrase.
+    order(chosen)
     return chosen
 
 
@@ -392,9 +397,32 @@ def search(
     if index.matrix is None or not index.items:
         return {"data": []}
 
-    # Round 1: standard fused retrieval
+    # Round 1: standard fused retrieval. With slots reserved for a second round
+    # it takes fewer, so the second round is not competing for the same places.
+    reserved = 0
+    if config.HOP2_SLOTS > 0 and config.llm_available():
+        reserved = max(0, min(config.HOP2_SLOTS, min(request.top_k, config.RETURN_LIMIT) - 1))
     scores1 = rank(index, request.query, request.options)
-    chosen1 = select(index, scores1, request.top_k)
+    chosen1 = select(index, scores1, request.top_k,
+                     limit_override=min(request.top_k, config.RETURN_LIMIT) - reserved if reserved else None)
+
+    if reserved:
+        reflection = llm.reflect_gap(request.query, request.options,
+                                     [item.content for item, _ in chosen1[:15]])
+        if reflection and reflection.get("status") == "INCOMPLETE" and reflection.get("question"):
+            scores2 = rank(index, request.query, request.options,
+                           recall_question=reflection["question"])
+            # The second round fills its own slots out of what the first did not
+            # take. Fusing the two scores instead — which is what
+            # AMI_AGENTIC_SEARCH does — leaves the second round's finds to
+            # out-rank the first round's hundred, and the evidence these
+            # questions miss sits two hundred places down.
+            spent = sum(len(item.content) for item, _ in chosen1)
+            chosen1 += select(index, scores2, request.top_k,
+                              limit_override=reserved,
+                              exclude={content_key(item) for item, _ in chosen1},
+                              budget_override=config.RETURN_CHAR_BUDGET - spent)
+            order(chosen1)
 
     # Agentic round: reflect → maybe a second retrieval
     if config.AGENTIC_SEARCH and config.llm_available():
