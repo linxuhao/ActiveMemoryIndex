@@ -6,6 +6,7 @@ raw-text channel even when the LLM is unavailable.
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 import re
@@ -149,7 +150,14 @@ _ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def _iso_or_none(value) -> str | None:
-    return value.strip() if isinstance(value, str) and _ISO_DAY.fullmatch(value.strip()) else None
+    """A real calendar day as YYYY-MM-DD, or None. 2023-13-45 is not a date."""
+    if not isinstance(value, str) or not _ISO_DAY.fullmatch(value.strip()):
+        return None
+    try:
+        dt.date.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    return value.strip()
 
 
 def _parse_dated(text: str) -> tuple[list[tuple[str, str | None]], dict[int, str]]:

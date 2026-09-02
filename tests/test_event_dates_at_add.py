@@ -61,8 +61,9 @@ ok &= check("event_date" in columns, "a store built before the column existed ga
 ok &= check(store.get("u0").items[0].event_date is None, "and its old rows read back undated")
 
 # --- the Add path --------------------------------------------------------------
-CANNED = '''{"facts": [{"text": "[2023-05-09] I met my mentor Rachel on April 10th", "happened": "2023-04-10"},
-                       {"text": "[2023-05-09] I prefer window seats", "happened": null}],
+CANNED = '''{"facts": [{"text": "I met my mentor Rachel on April 10th", "happened": "2023-04-10"},
+                       {"text": "I prefer window seats", "happened": null},
+                       {"text": "[2023-05-09] I said Rachel is my mentor", "happened": "2023-04-10"}],
             "turns": {"0": "2023-04-10", "1": null}}'''
 seen_prompts = []
 
@@ -88,12 +89,12 @@ try:
     ok &= check(len(seen_prompts) == 1, "one LLM call for the chunk, not one per memory")
     ok &= check("0 | [2023-05-09" in seen_prompts[0][1] and "\n1 | [2023-05-09" in seen_prompts[0][1],
                 "the turns go to the model numbered, with the date they were said")
-    ok &= check([i.kind for i in items] == ["raw", "raw", "fact", "fact"], "two turns and two facts stored")
-    ok &= check([i.event_date for i in items] == ["2023-04-10", None, "2023-04-10", None],
-                "the date lands on the right turn and the right fact; the undated stay None")
+    ok &= check([i.kind for i in items] == ["raw", "raw", "fact", "fact", "fact"], "two turns and three facts stored")
+    ok &= check([i.event_date for i in items] == ["2023-04-10", None, "2023-04-10", None, "2023-04-10"],
+                "the date lands on the right turn and the right facts; the undated stay None")
     store._cache.clear(); store._cached_items = 0
     reloaded = store.get("u1").items
-    ok &= check([i.event_date for i in reloaded] == ["2023-04-10", None, "2023-04-10", None],
+    ok &= check([i.event_date for i in reloaded] == ["2023-04-10", None, "2023-04-10", None, "2023-04-10"],
                 "the dates survive a reload from SQLite")
 
     # --- rendering from the store, no LLM ---------------------------------------
@@ -101,6 +102,10 @@ try:
     config.EVENT_DATES, config.EVENT_DATES_STORED = False, True
     out = main.event_indexed(reloaded)
     ok &= check(set(out) == {reloaded[0].id, reloaded[2].id}, "only the stored-dated memories are re-rendered")
+    # A fact the extractor stamped itself carries "[YYYY-MM-DD]" without a time,
+    # which the render regex does not match — the measured search-time arm left
+    # those alone too, and parity with it is the point of this arm.
+    ok &= check(reloaded[4].id not in out, "a fact stamped [date] by the extractor is left as it was, as before")
     ok &= check(out[reloaded[0].id].startswith("[said 2023-05-09 08:01 · happened 2023-04-10 · day 1] "),
                 "rendered exactly as the search-time arm rendered, without a call")
     config.EVENT_DATES_STORED = False

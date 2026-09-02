@@ -34,8 +34,9 @@ items = [
     store.Item(id="d", kind="fact", parent_id=None, content="likes jazz", created_at=None),
 ]
 
-saved_batch, saved_call = config.EVENT_BATCH, llm.event_dates
+saved_batch, saved_call, saved_switch = config.EVENT_BATCH, llm.event_dates, config.EVENT_DATES
 config.EVENT_BATCH = 20
+config.EVENT_DATES = True   # the search-time reading; off, only stored dates are rendered
 seen_batches = []
 
 
@@ -75,6 +76,7 @@ llm.event_dates = lambda batch: {0: "not-a-date", 1: "2023-13-45"}
 ok &= check(main.event_indexed(items) == {},
             "a malformed date is dropped rather than rendered")
 llm.event_dates = saved_call
+config.EVENT_DATES = saved_switch
 
 print("\nOK" if ok else "\nFAILED")
 sys.exit(0 if ok else 1)
