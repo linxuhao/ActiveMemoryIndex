@@ -65,6 +65,8 @@ LLM_CONCURRENCY = _int("AMI_LLM_CONCURRENCY", 40)
 LLM_MAX_TOKENS_EXTRACT = _int("AMI_LLM_MAX_TOKENS_EXTRACT", 1200)
 LLM_MAX_TOKENS_QUERY = _int("AMI_LLM_MAX_TOKENS_QUERY", 200)
 LLM_MAX_TOKENS_EVENTS = _int("AMI_LLM_MAX_TOKENS_EVENTS", 900)
+# The dated extraction returns a date beside every fact and turn; give it room.
+LLM_MAX_TOKENS_EXTRACT_DATED = _int("AMI_LLM_MAX_TOKENS_EXTRACT_DATED", 1600)
 
 # Feature switches: with no API key both fall back to the raw-text-only path.
 EXTRACT_ENABLED = _env("AMI_EXTRACT", "1") != "0"
@@ -130,6 +132,13 @@ WINDOW_RADIUS = _int("AMI_WINDOW_RADIUS", 1)
 # Costs one LLM call per EVENT_BATCH returned memories, on every search.
 EVENT_DATES = _env("AMI_EVENT_DATES", "0") != "0"
 EVENT_BATCH = _int("AMI_EVENT_BATCH", 20)
+# The same question asked once, at Add, of the extraction call that already
+# runs on every chunk — no extra calls, and a memory is dated once rather than
+# on every search that returns it. EVENT_DATES_AT_ADD stores the date beside
+# the memory; EVENT_DATES_STORED renders it at search the way EVENT_DATES does.
+# Both under measurement (bench/results/lme_event_dates_add_preregistration.md).
+EVENT_DATES_AT_ADD = _env("AMI_EVENT_DATES_AT_ADD", "0") != "0"
+EVENT_DATES_STORED = _env("AMI_EVENT_DATES_STORED", "0") != "0"
 # Order the returned memories oldest-first by their timestamp rather than by
 # relevance, inside whatever block RAW_FIRST has already put them in. Like
 # RAW_FIRST this changes order only, never membership. Temporal questions ask

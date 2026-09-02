@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS items (
     content    TEXT NOT NULL,
     created_at TEXT,
     seq        INTEGER,
-    vec        BLOB NOT NULL
+    vec        BLOB NOT NULL,
+    event_date TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_items_user ON items(user_id);
 CREATE TABLE IF NOT EXISTS requests (
@@ -50,6 +51,9 @@ class Item:
     parent_id: str | None
     content: str
     created_at: str | None
+    # When the described event happened (YYYY-MM-DD), if the extraction could
+    # tell; distinct from created_at, which is when it was said.
+    event_date: str | None = None
 
 
 class UserIndex:
@@ -78,6 +82,10 @@ def init() -> None:
         _conn.execute("PRAGMA journal_mode=WAL")
         _conn.execute("PRAGMA synchronous=NORMAL")
         _conn.executescript(SCHEMA)
+        # Stores built before the column existed: add it, empty.
+        columns = {row[1] for row in _conn.execute("PRAGMA table_info(items)")}
+        if "event_date" not in columns:
+            _conn.execute("ALTER TABLE items ADD COLUMN event_date TEXT")
         _conn.commit()
 
 
@@ -136,13 +144,14 @@ def add(user_id: str, session_id: str, request_id: str, items: list[Item], vecto
                 item.created_at,
                 seq + offset,
                 vectors[offset].tobytes(),
+                item.event_date,
             )
             for offset, item in enumerate(items)
         ]
         _conn.executemany(
             "INSERT OR REPLACE INTO items "
-            "(id, user_id, session_id, request_id, kind, parent_id, content, created_at, seq, vec) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, user_id, session_id, request_id, kind, parent_id, content, created_at, seq, vec, event_date) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
         _conn.execute(
@@ -181,11 +190,12 @@ def _load(user_id: str) -> UserIndex:
         return index
     index = UserIndex()
     rows = _conn.execute(
-        "SELECT id, kind, parent_id, content, created_at, vec FROM items WHERE user_id = ? ORDER BY seq",
+        "SELECT id, kind, parent_id, content, created_at, vec, event_date FROM items WHERE user_id = ? ORDER BY seq",
         (user_id,),
     ).fetchall()
     if rows:
-        items = [Item(id=r[0], kind=r[1], parent_id=r[2], content=r[3], created_at=r[4]) for r in rows]
+        items = [Item(id=r[0], kind=r[1], parent_id=r[2], content=r[3], created_at=r[4], event_date=r[6])
+                 for r in rows]
         matrix = np.vstack([np.frombuffer(r[5], dtype=np.float32) for r in rows])
         index.append(items, matrix)
     global _cached_items

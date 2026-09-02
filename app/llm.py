@@ -137,6 +137,70 @@ def extract_facts(chunk_text: str) -> list[str]:
     return facts
 
 
+EXTRACT_DATED_SYSTEM = EXTRACT_SYSTEM.replace(
+    'Return JSON only: {"facts": ["...", "..."]}. At most %d facts. Return {"facts": []} if there is nothing worth remembering.',
+    """The turns are numbered `N | [date and time it was said] role: text`.
+
+7. For each fact, and for each turn, also say WHEN the event it describes actually happened. The date it was said is not the date it happened: "I went to the museum yesterday" said on 2023-05-09 happened on 2023-05-08; "I met Rachel on April 10th" said on 2023-05-09 happened on 2023-04-10. Something ongoing, a plan, a preference or no event at all has no event date. Use null whenever the text and the said-date together do not fix a specific day. Do not guess.
+
+Return JSON only: {"facts": [{"text": "...", "happened": "YYYY-MM-DD" or null}, ...], "turns": {"N": "YYYY-MM-DD" or null, ...}} with one "turns" key per turn number given. At most %d facts. Return {"facts": [], "turns": {}} if there is nothing worth remembering.""")
+
+_ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _iso_or_none(value) -> str | None:
+    return value.strip() if isinstance(value, str) and _ISO_DAY.fullmatch(value.strip()) else None
+
+
+def _parse_dated(text: str) -> tuple[list[tuple[str, str | None]], dict[int, str]]:
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        return [], {}
+    try:
+        payload = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return [], {}
+    facts: list[tuple[str, str | None]] = []
+    for entry in payload.get("facts", []) if isinstance(payload.get("facts"), list) else []:
+        if isinstance(entry, dict):
+            body = str(entry.get("text", "")).strip()
+            if body:
+                facts.append((body, _iso_or_none(entry.get("happened"))))
+        elif isinstance(entry, str) and entry.strip():
+            facts.append((entry.strip(), None))
+    turns: dict[int, str] = {}
+    for key, value in (payload.get("turns") or {}).items() if isinstance(payload.get("turns"), dict) else []:
+        iso = _iso_or_none(value)
+        try:
+            position = int(key)
+        except (TypeError, ValueError):
+            continue
+        if iso and position >= 0:
+            turns[position] = iso
+    return facts[: config.LLM_MAX_FACTS], turns
+
+
+def extract_dated(lines: list[str]) -> tuple[list[tuple[str, str | None]], dict[int, str]]:
+    """Add path with event dates: facts as (text, happened) and {turn: happened}.
+
+    One call, the same one extract_facts() makes; the reading that
+    event_dates() does at search time is done here once per chunk instead of
+    once per search that returns the memory. Failure degrades to no facts and
+    no dates, exactly as extract_facts() does.
+    """
+    if not config.EXTRACT_ENABLED:
+        return [], {}
+    numbered = "\n".join(f"{n} | {line}" for n, line in enumerate(lines))
+    raw = _complete(EXTRACT_DATED_SYSTEM % config.LLM_MAX_FACTS, numbered, config.LLM_MAX_TOKENS_EXTRACT_DATED)
+    if raw is None:
+        return [], {}
+    facts, turns = _parse_dated(raw)
+    if raw and not facts:
+        counters["empty_extractions"] += 1
+        log.warning("dated extraction returned no usable facts from a %d-char reply", len(raw))
+    return facts, turns
+
+
 def recall_question(query: str, options: list[str] | None) -> str | None:
     """Search path: the same question in the log's own first-person register."""
     if not config.RECALL_QUERY_ENABLED:

@@ -134,11 +134,17 @@ def event_indexed(items: list[store.Item]) -> dict[str, str]:
     if not stamped:
         return {}
     found: dict[int, str] = {}
-    for start in range(0, len(stamped), config.EVENT_BATCH):
-        block = stamped[start: start + config.EVENT_BATCH]
-        batch = [(m.group(1), item.content[m.end():]) for item, m in block]
-        for offset, iso in llm.event_dates(batch).items():
-            found[start + offset] = iso
+    if config.EVENT_DATES_STORED:
+        for position, (item, _) in enumerate(stamped):
+            if item.event_date:
+                found[position] = item.event_date
+    if config.EVENT_DATES:
+        pending = [(position, item, m) for position, (item, m) in enumerate(stamped) if position not in found]
+        for start in range(0, len(pending), config.EVENT_BATCH):
+            block = pending[start: start + config.EVENT_BATCH]
+            batch = [(m.group(1), item.content[m.end():]) for _, item, m in block]
+            for offset, iso in llm.event_dates(batch).items():
+                found[block[offset][0]] = iso
 
     dated = []
     for position, iso in found.items():
@@ -157,8 +163,8 @@ def event_indexed(items: list[store.Item]) -> dict[str, str]:
     return out
 
 
-def build_items(request: AddRequest) -> tuple[list[store.Item], str]:
-    """Raw messages (verbatim, timestamped) plus the chunk text handed to the LLM."""
+def build_items(request: AddRequest) -> tuple[list[store.Item], list[str]]:
+    """Raw messages (verbatim, timestamped) plus the lines handed to the LLM, one per item."""
     items: list[store.Item] = []
     lines: list[str] = []
     for position, message in enumerate(request.messages):
@@ -177,7 +183,7 @@ def build_items(request: AddRequest) -> tuple[list[store.Item], str]:
             )
         )
         lines.append(f"{prefix}{message.role}: {content}")
-    return items, "\n".join(lines)
+    return items, lines
 
 
 def chunk_prefix(request: AddRequest) -> str:
@@ -305,7 +311,7 @@ def startup() -> None:
         log.warning("AMI_AUTH_SCHEME=%r is not a documented scheme; a secret is still "
                     "required, but check your configuration", config.AUTH_SCHEME)
     log.info(
-        "ready: auth=%s embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s raw_first=%s window=%d rerank=%s cache_max=%d embed_threads=%d",
+        "ready: auth=%s embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s raw_first=%s window=%d rerank=%s event_dates=%s cache_max=%d embed_threads=%d",
         config.AUTH_SCHEME,
         config.EMBED_MODEL,
         config.LLM_MODEL if config.llm_available() else "disabled",
@@ -316,6 +322,7 @@ def startup() -> None:
         "on" if config.RAW_FIRST else "off",
         config.WINDOW_RADIUS,
         config.RERANK_MODEL or "off",
+        f"add:{int(config.EVENT_DATES_AT_ADD)}/stored:{int(config.EVENT_DATES_STORED)}/llm:{int(config.EVENT_DATES)}",
         config.CACHE_MAX_ITEMS,
         config.EMBED_THREADS,
     )
@@ -366,10 +373,20 @@ def add(
         if store.request_seen(request.request_id, request.user_id):
             return echo
 
-        items, chunk_text = build_items(request)
-        if chunk_text:
+        items, lines = build_items(request)
+        if lines:
             prefix = chunk_prefix(request)
-            for position, fact in enumerate(llm.extract_facts(chunk_text)):
+            if config.EVENT_DATES_AT_ADD:
+                # One call for both: the facts, and when each fact's and each
+                # turn's event happened. Turn n is items[n]: build_items keeps
+                # the two lists aligned.
+                facts, turn_dates = llm.extract_dated(lines)
+                for position, iso in turn_dates.items():
+                    if position < len(items):
+                        items[position].event_date = iso
+            else:
+                facts = [(fact, None) for fact in llm.extract_facts("\n".join(lines))]
+            for position, (fact, happened) in enumerate(facts):
                 content = fact if fact.startswith("[") else f"{prefix}{fact}"
                 items.append(
                     store.Item(
@@ -378,6 +395,7 @@ def add(
                         parent_id=None,
                         content=content,
                         created_at=items[0].created_at if items else None,
+                        event_date=happened,
                     )
                 )
         if items:
@@ -453,7 +471,8 @@ def search(
 
     # Re-rendered on the way out; the stored text is never rewritten, so turning
     # this off returns exactly what it returned before.
-    redated = event_indexed([item for item, _ in chosen1]) if config.EVENT_DATES else {}
+    redated = (event_indexed([item for item, _ in chosen1])
+               if config.EVENT_DATES or config.EVENT_DATES_STORED else {})
     data = [
         {
             "id": item.id,
