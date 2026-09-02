@@ -10,7 +10,7 @@ import numpy as np
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import config, embed, llm, store
+from . import config, embed, llm, rerank, store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("ami")
@@ -296,6 +296,8 @@ def startup() -> None:
         raise RuntimeError(problem)
     store.init()
     embed.warm_up()
+    if config.RERANK_MODEL:
+        rerank.warm_up()
     if config.AUTH_SCHEME == "none":
         log.warning("auth is DISABLED (AMI_AUTH_SCHEME=none): anyone who can reach this "
                     "service can read and write any user_id")
@@ -303,7 +305,7 @@ def startup() -> None:
         log.warning("AMI_AUTH_SCHEME=%r is not a documented scheme; a secret is still "
                     "required, but check your configuration", config.AUTH_SCHEME)
     log.info(
-        "ready: auth=%s embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s raw_first=%s window=%d cache_max=%d embed_threads=%d",
+        "ready: auth=%s embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s raw_first=%s window=%d rerank=%s cache_max=%d embed_threads=%d",
         config.AUTH_SCHEME,
         config.EMBED_MODEL,
         config.LLM_MODEL if config.llm_available() else "disabled",
@@ -313,6 +315,7 @@ def startup() -> None:
         "on" if config.AGENTIC_SEARCH else "off",
         "on" if config.RAW_FIRST else "off",
         config.WINDOW_RADIUS,
+        config.RERANK_MODEL or "off",
         config.CACHE_MAX_ITEMS,
         config.EMBED_THREADS,
     )
@@ -403,6 +406,8 @@ def search(
     if config.HOP2_SLOTS > 0 and config.llm_available():
         reserved = max(0, min(config.HOP2_SLOTS, min(request.top_k, config.RETURN_LIMIT) - 1))
     scores1 = rank(index, request.query, request.options)
+    if config.RERANK_MODEL:
+        scores1 = rerank.rescore(index, request.query, scores1)
     chosen1 = select(index, scores1, request.top_k,
                      limit_override=min(request.top_k, config.RETURN_LIMIT) - reserved if reserved else None)
 

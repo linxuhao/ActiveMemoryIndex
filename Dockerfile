@@ -22,6 +22,10 @@ RUN pip install -r requirements.txt
 # Bake the embedding weights into the image so the container needs no network
 # for retrieval at evaluation time.
 RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('BAAI/bge-small-en-v1.5')"
+# Optionally bake a cross-encoder for AMI_RERANK_MODEL. Bench images only so
+# far; the production image is built without it.
+ARG AMI_BAKE_RERANKER=""
+RUN if [ -n "$AMI_BAKE_RERANKER" ]; then python -c "from huggingface_hub import snapshot_download; snapshot_download('$AMI_BAKE_RERANKER')"; fi
 ENV HF_HUB_OFFLINE=1
 
 COPY app ./app

@@ -139,6 +139,16 @@ EVENT_BATCH = _int("AMI_EVENT_BATCH", 20)
 # memories. Off by default: it is an arm under measurement, not a finding.
 CHRONO_ORDER = _env("AMI_CHRONO_ORDER", "0") != "0"
 
+# --- reranking ---------------------------------------------------------------
+# Re-read the top candidates with a cross-encoder before selecting. Empty = off.
+# Under measurement (bench/results/locomo_rerank_preregistration.md), not a
+# finding. The cost is CPU and per search: ms-marco-MiniLM-L-6-v2 measured
+# 26 ms/pair single-threaded at 256 tokens, so 200 candidates is about 5 s.
+RERANK_MODEL = _env("AMI_RERANK_MODEL", "")
+RERANK_CANDIDATES = _int("AMI_RERANK_CANDIDATES", 200)
+RERANK_MAX_LENGTH = _int("AMI_RERANK_MAX_LENGTH", 256)
+RERANK_BATCH = _int("AMI_RERANK_BATCH", 32)
+
 # --- memory ------------------------------------------------------------------
 # Upper bound on rows held in the per-user vector cache, across all users. The
 # cache is a read-through of SQLite, so eviction costs a reload, never a result.
