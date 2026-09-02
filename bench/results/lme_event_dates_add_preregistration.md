@@ -68,3 +68,15 @@ It ships as the two switches on, in production, before the September window
 opens — the platform injects its data live, so the store the evaluation reads
 is built with this on from its first Add or not at all. Its cost there is
 extraction output tokens only.
+
+## Amendment, 2026-09-02, before any arm ran
+
+The "49 questions that need a current date" in `lme_temporal_baseline.md` were
+labelled by a rule that was not saved; the candidate rules tried reproduce 38
+or 44 of them, not 49. The specificity clause therefore uses a rule pinned
+now, in `bench/out/analyze_4v4.py` (`NOW`): a question is now-anchored when it
+contains *ago, since, so far, until now, by now, how long has/have, still,
+currently, now, recent-, latest, last <weekday/week/month/year/night>,
+this <week/month/year>, today, yesterday*. On the temporal set this labels
+about 51 questions. The clause reads: that subset moves by no more than one
+question in mean over the four runs. The 49 is not used.
