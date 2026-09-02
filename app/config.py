@@ -136,7 +136,14 @@ EVENT_BATCH = _int("AMI_EVENT_BATCH", 20)
 # runs on every chunk — no extra calls, and a memory is dated once rather than
 # on every search that returns it. EVENT_DATES_AT_ADD stores the date beside
 # the memory; EVENT_DATES_STORED renders it at search the way EVENT_DATES does.
-# Both under measurement (bench/results/lme_event_dates_add_preregistration.md).
+#
+# Measured and failed its pre-registered gate (bench/results/lme_event_dates_add.md):
+# +2.00 against the search-time reading's +5.75, p=0.086, and the lift landed on
+# the subset the mechanism cannot address. Not the number of dates — both date
+# 10.2% of returned memories — but their quality: asked as a side-task of the
+# extraction call, the model answers "it happened the day it was said" 61% of
+# the time against the dedicated call's 32%. A separate dating call at Add is
+# the untried arm that separates timing from load.
 EVENT_DATES_AT_ADD = _env("AMI_EVENT_DATES_AT_ADD", "0") != "0"
 EVENT_DATES_STORED = _env("AMI_EVENT_DATES_STORED", "0") != "0"
 # Order the returned memories oldest-first by their timestamp rather than by
