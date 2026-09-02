@@ -141,8 +141,12 @@ CHRONO_ORDER = _env("AMI_CHRONO_ORDER", "0") != "0"
 
 # --- reranking ---------------------------------------------------------------
 # Re-read the top candidates with a cross-encoder before selecting. Empty = off.
-# Under measurement (bench/results/locomo_rerank_preregistration.md), not a
-# finding. The cost is CPU and per search: ms-marco-MiniLM-L-6-v2 measured
+#
+# Measured and failed its pre-registered gate (bench/results/locomo_rerank.md):
+# ms-marco-MiniLM-L-6-v2 over the top 200 doubled recall@1 and took LoCoMo
+# multi-hop completeness from 0.559 to 0.456. A model scoring "does this passage
+# answer the question" demotes the passages of a multi-evidence question, none
+# of which answers it alone. Kept as the place a different rescorer would go;
 # 26 ms/pair single-threaded at 256 tokens, so 200 candidates is about 5 s.
 RERANK_MODEL = _env("AMI_RERANK_MODEL", "")
 RERANK_CANDIDATES = _int("AMI_RERANK_CANDIDATES", 200)
