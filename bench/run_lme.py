@@ -272,6 +272,23 @@ def answer(args) -> None:
         question = result["question"]
         if args.with_question_date:
             question = f"Today is {result['question_date']}. {question}"
+        # The reader's question frame is not a channel we have: the platform's
+        # answer prompt has five slots and we fill only the memories. So a date
+        # can only reach the reader AS a memory. --now-hint measures that
+        # channel; --now-router gates it on the question needing a present;
+        # --now-estimated uses the newest returned memory instead of the
+        # dataset's question_date, which is the only "now" a submission could
+        # actually compute.
+        if args.now_hint:
+            if not args.now_router or NOW_ANCHORED.search(result["question"]):
+                stamps = [m.group(1) for e in result["ranked"][: args.prefix]
+                          for m in [MEMORY_STAMP.search(e["content"])] if m]
+                if args.now_estimated:
+                    now = max(stamps) if stamps else None
+                else:
+                    now = result["question_date"][:10].replace("/", "-")
+                if now:
+                    memories = f"[today's date is {now}]\n" + memories
         item = {
             "id": result["id"], "question": question, "gold_answer": result["gold_answer"],
             "speaker_1_name": "the user", "speaker_1_memories": memories,
@@ -285,6 +302,15 @@ def answer(args) -> None:
     path = target / f"answers_p{args.prefix}.json"
     path.write_text(json.dumps(answers, ensure_ascii=False), encoding="utf-8")
     print(f"answered {len(answers)} -> {path}")
+
+
+# Pinned in bench/results/lme_event_dates_add_preregistration.md before it was
+# first used to score anything.
+NOW_ANCHORED = re.compile(
+    r"\bago\b|\bsince\b|so far|until now|by now|how long (?:has|have)\b|\bstill\b|\bcurrently\b|"
+    r"\bnow\b|\brecent|\blatest\b|\blast (?:mon|tues|wednes|thurs|fri|satur|sun)day\b|"
+    r"\blast (?:week|month|year|night)\b|\bthis (?:week|month|year)\b|\btoday\b|\byesterday\b", re.I)
+MEMORY_STAMP = re.compile(r"^\[(?:said )?(\d{4}-\d{2}-\d{2})")
 
 
 def judge(args) -> None:
@@ -364,6 +390,12 @@ def main() -> None:
         parser.add_argument("--api-key", default=None)
         parser.add_argument("--max-tokens", type=int, default=256)
         parser.add_argument("--with-question-date", action="store_true")
+        parser.add_argument("--now-hint", action="store_true",
+                            help="prepend today's date to the memories, the only channel we control")
+        parser.add_argument("--now-router", action="store_true",
+                            help="only for questions that need a present")
+        parser.add_argument("--now-estimated", action="store_true",
+                            help="use the newest returned memory as 'now' instead of the dataset's date")
         parser.set_defaults(run=function)
 
     args = root.parse_args()
