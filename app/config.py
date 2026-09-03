@@ -137,21 +137,18 @@ EVENT_BATCH = _int("AMI_EVENT_BATCH", 20)
 # on every search that returns it. EVENT_DATES_AT_ADD stores the date beside
 # the memory; EVENT_DATES_STORED renders it at search the way EVENT_DATES does.
 #
-# Measured and failed its pre-registered gate (bench/results/lme_event_dates_add.md):
-# +2.00 against the search-time reading's +5.75, p=0.086, and the lift landed on
-# the subset the mechanism cannot address. Not the number of dates — both date
-# 10.2% of returned memories — but their quality: asked as a side-task of the
-# extraction call, the model answers "it happened the day it was said" 61% of
-# the time against the dedicated call's 32%. A separate dating call at Add is
-# the untried arm that separates timing from load.
+# Both measured, both failed their pre-registered gates:
+# lme_event_dates_add.md (merged into extraction) +2.00, p=0.086; and
+# lme_event_dates_call.md (its own call at Add) -2.25, p=0.086, on a store whose
+# base reproduced lme-t exactly. The three readings produce comparable dates and
+# agree on 87.7% of the memories they both date, yet score +5.75, +2.00 and
+# -2.25. Only the reading that sees the RETURNED SET helps, and that one costs
+# ~5 calls per search. The family is closed; the switches stay, all off.
 EVENT_DATES_AT_ADD = _env("AMI_EVENT_DATES_AT_ADD", "0") != "0"
 EVENT_DATES_STORED = _env("AMI_EVENT_DATES_STORED", "0") != "0"
 # The separation arm: the SAME dedicated dating call the search-time reading
-# makes, moved to Add. One extra call per chunk instead of ~5 per search, and
-# extraction keeps its original prompt — so this changes the timing of the
-# reading without changing its load, which AMI_EVENT_DATES_AT_ADD confounded.
-# Independent of EVENT_DATES_AT_ADD; setting both is not a configuration that
-# was measured. (bench/results/lme_event_dates_call_preregistration.md)
+# makes, moved to Add. Measured: -2.25 (bench/results/lme_event_dates_call.md).
+# Timing, not load, was the difference, and it runs the wrong way.
 EVENT_DATES_ADD_CALL = _env("AMI_EVENT_DATES_ADD_CALL", "0") != "0"
 # Order the returned memories oldest-first by their timestamp rather than by
 # relevance, inside whatever block RAW_FIRST has already put them in. Like

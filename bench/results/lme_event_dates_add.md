@@ -70,6 +70,14 @@ write-time 697 / 655).
 
 ## It is the quality of the dates
 
+> **Superseded 2026-09-03 — this section's conclusion is wrong.** A dedicated
+> dating call at Add produced a *higher* non-trivial rate (75.8% on returned
+> memories) and scored **−2.25** end to end. The non-trivial rate is not a
+> quality measure and does not predict the outcome. See
+> `lme_event_dates_call.md`. The measurements below stand; the inference from
+> them does not.
+
+
 | | happened ≠ said |
 |---|---:|
 | search-time reading | **68.3%** (920 / 1,347) |
@@ -98,8 +106,9 @@ for them alone.** Same model, same memories, same coverage, half the
 non-trivial rate. The extraction call is reading a whole chunk and producing up
 to 24 facts; the dating is a second job done under that load, and it satisfices.
 
-The cheap thing that separates those two explanations is a **dedicated dating
-call at Add** — one extra call per chunk, the same prompt the search-time arm
+*(Written before the separation arm ran. It ran, and refuted this: see
+`lme_event_dates_call.md`.)* The cheap thing that separates those two
+explanations is a **dedicated dating call at Add** — one extra call per chunk, the same prompt the search-time arm
 used, still priced once per memory instead of once per retrieval. That is 6,392
 calls to build a store against roughly 24,000 per formal evaluation at search
 time, so the economics that ruled out the search-time arm still favour Add.
