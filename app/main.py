@@ -163,6 +163,24 @@ def event_indexed(items: list[store.Item]) -> dict[str, str]:
     return out
 
 
+def date_items(items: list[store.Item]) -> int:
+    """Ask the reader when each stamped memory's event happened; store it.
+
+    Exactly the call ``event_indexed`` makes at search time, over a chunk's own
+    memories instead of over a returned set. Failure leaves every date None,
+    which is the same as the switch being off. Returns how many were dated.
+    """
+    stamped = [(item, match) for item in items for match in [STAMPED.match(item.content)] if match]
+    dated = 0
+    for start in range(0, len(stamped), config.EVENT_BATCH):
+        block = stamped[start: start + config.EVENT_BATCH]
+        batch = [(m.group(1), item.content[m.end():]) for item, m in block]
+        for offset, iso in llm.event_dates(batch).items():
+            block[offset][0].event_date = iso
+            dated += 1
+    return dated
+
+
 def build_items(request: AddRequest) -> tuple[list[store.Item], list[str]]:
     """Raw messages (verbatim, timestamped) plus the lines handed to the LLM, one per item."""
     items: list[store.Item] = []
@@ -322,7 +340,7 @@ def startup() -> None:
         "on" if config.RAW_FIRST else "off",
         config.WINDOW_RADIUS,
         config.RERANK_MODEL or "off",
-        f"add:{int(config.EVENT_DATES_AT_ADD)}/stored:{int(config.EVENT_DATES_STORED)}/llm:{int(config.EVENT_DATES)}",
+        f"add:{int(config.EVENT_DATES_AT_ADD)}/addcall:{int(config.EVENT_DATES_ADD_CALL)}/stored:{int(config.EVENT_DATES_STORED)}/llm:{int(config.EVENT_DATES)}",
         config.CACHE_MAX_ITEMS,
         config.EMBED_THREADS,
     )
@@ -398,6 +416,9 @@ def add(
                         event_date=happened,
                     )
                 )
+        if items and config.EVENT_DATES_ADD_CALL:
+            # One dedicated call per chunk, asking only for dates.
+            date_items(items)
         if items:
             vectors = embed.encode([item.content for item in items])
             store.add(request.user_id, request.session_id, request.request_id, items, vectors)

@@ -146,6 +146,13 @@ EVENT_BATCH = _int("AMI_EVENT_BATCH", 20)
 # the untried arm that separates timing from load.
 EVENT_DATES_AT_ADD = _env("AMI_EVENT_DATES_AT_ADD", "0") != "0"
 EVENT_DATES_STORED = _env("AMI_EVENT_DATES_STORED", "0") != "0"
+# The separation arm: the SAME dedicated dating call the search-time reading
+# makes, moved to Add. One extra call per chunk instead of ~5 per search, and
+# extraction keeps its original prompt — so this changes the timing of the
+# reading without changing its load, which AMI_EVENT_DATES_AT_ADD confounded.
+# Independent of EVENT_DATES_AT_ADD; setting both is not a configuration that
+# was measured. (bench/results/lme_event_dates_call_preregistration.md)
+EVENT_DATES_ADD_CALL = _env("AMI_EVENT_DATES_ADD_CALL", "0") != "0"
 # Order the returned memories oldest-first by their timestamp rather than by
 # relevance, inside whatever block RAW_FIRST has already put them in. Like
 # RAW_FIRST this changes order only, never membership. Temporal questions ask
