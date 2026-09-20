@@ -64,6 +64,30 @@ arm is a re-run of retrieval and answering only.
    is the switch and nothing else. This is the first arm in the project where
    that is true.
 
+**Note added 2026-09-21, after implementation, before the arm.** The gate is
+unchanged; this sharpens read 1 and lowers what should be expected of it.
+
+Trying to demonstrate the expansion over HTTP on a hand-seeded store failed
+three times in the same way: **the fact kept ranking below the verbatim turns**,
+including turns of other chunks that merely share the question's wording. At the
+top_k where the fact was inside the returned set, its own turns were immediately
+behind it anyway; where distractors were strong enough to push its turns out, they
+pushed the fact out too. The toy store is a poor instrument — its scores were
+hand-tuned by rewording — so this is not evidence about the real one. But it
+names a precondition the pre-registration left implicit:
+
+> The expansion can only fire when a fact outranks turns. On LoCoMo the base
+> returns 54.4 verbatim turns of ~100, so if facts routinely sit below turns,
+> arm 0 rarely fires and its ceiling is low regardless of whether the mechanism
+> is sound.
+
+Read 1 therefore reports the **rank distribution of facts in the base returned
+set** before anything else. A low firing rate is a finding about the ranker, not
+a refutation of the mechanism, and it would point at a different arm — one that
+lifts facts so they can carry their evidence — rather than at abandoning it.
+`AMI_RAW_FIRST` already orders turns ahead of facts *after* selection; whether
+facts also lose the *selection* is not something this project has measured.
+
 ## Decision rule
 
 Arms differ only in `AMI_FACT_EVIDENCE`: base 0, arm 2. Everything else as
