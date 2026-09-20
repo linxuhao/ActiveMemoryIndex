@@ -253,6 +253,21 @@ def neighbours(index: store.UserIndex, item: store.Item) -> list[store.Item]:
     return out
 
 
+def evidence(index: store.UserIndex, item: store.Item, scores: np.ndarray) -> list[store.Item]:
+    """The highest-scoring turns of the Add chunk *item* was extracted from.
+
+    The symmetric move to ``neighbours``, which does this for turns and leaves
+    facts pulling nothing. A fact is a standalone claim, so it survives the kind
+    of relevance scoring that demotes every turn of a multi-evidence question —
+    none of which answers it alone (bench/results/locomo_rerank.md).
+    """
+    if config.FACT_EVIDENCE <= 0 or item.kind != "fact":
+        return []
+    rows = index.by_chunk.get(item.id.rsplit("-", 1)[0], [])
+    best = sorted(rows, key=lambda row: -scores[row])[: config.FACT_EVIDENCE]
+    return [index.items[row] for row in best]
+
+
 def content_key(item: store.Item) -> str:
     return " ".join(item.content.lower().split())[:120]
 
@@ -294,11 +309,12 @@ def select(index: store.UserIndex, scores: np.ndarray, top_k: int,
         score = float(scores[int(position)])
         if take(item, score):
             break
-        # A verbatim turn brings its neighbours, which take slots from the same
-        # top_k — breadth of sources traded for local context, not extra text.
+        # A verbatim turn brings its neighbours, and a fact brings the best
+        # turns of the chunk it was extracted from. Both take slots from the
+        # same top_k — breadth of sources traded for context, not extra text.
         full = False
-        for neighbour in neighbours(index, item):
-            if take(neighbour, score):
+        for extra in neighbours(index, item) + evidence(index, item, scores):
+            if take(extra, score):
                 full = True
                 break
         if full:
@@ -329,7 +345,7 @@ def startup() -> None:
         log.warning("AMI_AUTH_SCHEME=%r is not a documented scheme; a secret is still "
                     "required, but check your configuration", config.AUTH_SCHEME)
     log.info(
-        "ready: auth=%s embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s raw_first=%s window=%d rerank=%s event_dates=%s cache_max=%d embed_threads=%d",
+        "ready: auth=%s embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s raw_first=%s window=%d fact_evidence=%d rerank=%s event_dates=%s cache_max=%d embed_threads=%d",
         config.AUTH_SCHEME,
         config.EMBED_MODEL,
         config.LLM_MODEL if config.llm_available() else "disabled",
@@ -339,6 +355,7 @@ def startup() -> None:
         "on" if config.AGENTIC_SEARCH else "off",
         "on" if config.RAW_FIRST else "off",
         config.WINDOW_RADIUS,
+        config.FACT_EVIDENCE,
         config.RERANK_MODEL or "off",
         f"add:{int(config.EVENT_DATES_AT_ADD)}/addcall:{int(config.EVENT_DATES_ADD_CALL)}/stored:{int(config.EVENT_DATES_STORED)}/llm:{int(config.EVENT_DATES)}",
         config.CACHE_MAX_ITEMS,

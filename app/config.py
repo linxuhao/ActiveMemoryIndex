@@ -118,6 +118,22 @@ RAW_FIRST = _env("AMI_RAW_FIRST", "1") != "0"
 # (.6802 / .6695 / .6763, paired p=0.16 and p=0.69); all three beat radius 0
 # (.6333) decisively. 1 is shipped because it keeps the most breadth per slot.
 WINDOW_RADIUS = _int("AMI_WINDOW_RADIUS", 1)
+# Return each selected fact together with the highest-scoring verbatim turns of
+# the Add chunk it was extracted from — the symmetric move to WINDOW_RADIUS,
+# which does this for turns but leaves facts pulling nothing.
+#
+# The cross-encoder arm showed why this might matter: a model scoring "does this
+# passage answer the question" demotes every turn of a multi-evidence question,
+# because none of them answers it alone (bench/results/locomo_rerank.md). A fact
+# is a standalone claim and does not have that problem, so ranking the facts and
+# letting them carry their evidence turns a multi-evidence retrieval problem into
+# single-target retrieval plus a deterministic expansion.
+#
+# Chunk-level, not claim-level: pulling the turns that specifically support a
+# fact would need the extractor to emit turn indices, and a longer extraction
+# prompt is what moved the base +1.75 in bench/results/lme_event_dates_add.md.
+# Like the neighbour window this spends slots from the same top_k.
+FACT_EVIDENCE = _int("AMI_FACT_EVIDENCE", 0)
 
 # Ask the model when each returned memory's event actually happened, then do
 # the arithmetic in code.

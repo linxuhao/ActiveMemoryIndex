@@ -63,10 +63,17 @@ class UserIndex:
         # id -> row, so the neighbours of a selected turn can be found without
         # scanning the user's whole history on every search.
         self.by_id: dict[str, int] = {}
+        # chunk digest -> rows of that chunk's verbatim turns, for the same
+        # reason: a selected fact finds the turns it was extracted from without
+        # a scan. Raw positions can have gaps, so this is built, not counted.
+        self.by_chunk: dict[str, list[int]] = {}
 
     def append(self, items: list[Item], vectors: np.ndarray) -> None:
         for offset, item in enumerate(items):
-            self.by_id[item.id] = len(self.items) + offset
+            row = len(self.items) + offset
+            self.by_id[item.id] = row
+            if item.kind == "raw":
+                self.by_chunk.setdefault(item.id.rsplit("-", 1)[0], []).append(row)
         self.items.extend(items)
         self.matrix = vectors if self.matrix is None else np.vstack([self.matrix, vectors])
 
