@@ -64,6 +64,12 @@ for name in "$@"; do
     # Ceiling probe, NOT a shippable arm: 42/133 questions are anchored to
     # "now" and no published pipeline conveys the question date.
     qdate)    arm qdate "--with-question-date" -e AMI_RAW_FIRST=1 -e AMI_WINDOW_RADIUS=1 -e AMI_AGENTIC_SEARCH=0 -e AMI_CHRONO_ORDER=0 ;;
+    # Delivery only: the shipped selection, but each selected memory is returned
+    # as the whole Add chunk it belongs to, one slot instead of eighteen.
+    chunkmem) arm chunkmem "" -e AMI_RAW_FIRST=1 -e AMI_WINDOW_RADIUS=1 -e AMI_AGENTIC_SEARCH=0 -e AMI_CHRONO_ORDER=0 -e AMI_CHUNK_MEMORY=1 ;;
+    # The arm: facts do the selecting, chunks come back whole. Decision rule in
+    # bench/results/chunk_memory_preregistration.md.
+    factsel)  arm factsel  "" -e AMI_RAW_FIRST=1 -e AMI_WINDOW_RADIUS=1 -e AMI_AGENTIC_SEARCH=0 -e AMI_CHRONO_ORDER=0 -e AMI_FACT_SELECT=1 -e AMI_CHUNK_MEMORY=1 ;;
     # Same configuration as base, run twice: the noise floor of this instrument,
     # measured before any arm is judged against it.
     base2)    arm base2    ""  -e AMI_RAW_FIRST=1 -e AMI_WINDOW_RADIUS=1 -e AMI_AGENTIC_SEARCH=0 -e AMI_CHRONO_ORDER=0 ;;

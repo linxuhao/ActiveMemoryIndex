@@ -141,6 +141,10 @@ FACT_EVIDENCE = _int("AMI_FACT_EVIDENCE", 0)
 # also *delivered* facts, and a fact is a lossy paraphrase. Paired with
 # CHUNK_MEMORY it selects with facts and delivers verbatim text.
 # See bench/results/locomo_lost_arms.md.
+# Measured and failed its gate: paired with CHUNK_MEMORY at the shipped
+# character budget it scored 51.50 against 58.50, complete separation,
+# p=0.029 negative (bench/results/lme_chunk_memory.md). Fact-only selection
+# has now been measured with both deliveries, lossy and verbatim. Closed.
 FACT_SELECT = _env("AMI_FACT_SELECT", "0") != "0"
 # Return a selected memory as the whole Add chunk it belongs to: that chunk's
 # turns, verbatim and in order, joined into one memory. Chunks dedup, so many
@@ -154,6 +158,12 @@ FACT_SELECT = _env("AMI_FACT_SELECT", "0") != "0"
 # Permitted as evidence organisation (docs/cycle2_official_qa_zh.md, Q18) and
 # the weakest possible use of that permission: no text is rewritten, so the
 # query still only selects.
+# Measured and failed. Uncapped it spends ~99,700 of the platform's 117,760
+# Answer tokens; capped to the shipped budget it returns 7.2 memories and
+# leaves 93 of the 100 slots unused, at identical evidence completeness and
+# identical text, for -7.00 questions. The constraint is the size of the
+# delivery unit, not the quality of selection, so no ranking change recovers
+# it. See bench/results/lme_chunk_memory.md.
 CHUNK_MEMORY = _env("AMI_CHUNK_MEMORY", "0") != "0"
 
 # Ask the model when each returned memory's event actually happened, then do
