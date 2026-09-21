@@ -133,6 +133,17 @@ WINDOW_RADIUS = _int("AMI_WINDOW_RADIUS", 1)
 # fact would need the extractor to emit turn indices, and a longer extraction
 # prompt is what moved the base +1.75 in bench/results/lme_event_dates_add.md.
 # Like the neighbour window this spends slots from the same top_k.
+#
+# Measured. It PASSED its end-to-end gate on LongMemEval temporal (+5.75,
+# 63/64/66/64 against 57/59/60/58, complete separation, p=0.029) with the
+# gain exactly where the mechanism predicted: +4.25 on two-evidence
+# questions, +2.00 on three-or-more, -0.50 on single-evidence. It then
+# FAILED its pre-registered veto: LoCoMo cat1 complete@100 fell .596 to
+# .543. Per the rule written before the run it does not ship, and stays 0.
+# The conflict is unresolved rather than settled -- the gate is end-to-end
+# on one corpus and the veto is coverage on another, and coverage has now
+# inverted against accuracy bucket by bucket. See
+# bench/results/lme_fact_evidence.md.
 FACT_EVIDENCE = _int("AMI_FACT_EVIDENCE", 0)
 # Score only extracted facts; verbatim turns stop being candidates for
 # selection. On LoCoMo this had the best retrieval coverage measured anywhere in
