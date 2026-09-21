@@ -217,7 +217,9 @@ EVENT_DATES_ADD_CALL = _env("AMI_EVENT_DATES_ADD_CALL", "0") != "0"
 # which of two events came first, or how far apart they were; when the returned
 # set arrives in time order the answer is close to readable off the page,
 # whereas relevance order interleaves the two dates among a hundred other
-# memories. Off by default: it is an arm under measurement, not a finding.
+# memories. Measured flat on temporal (59 vs 57/59, one run; then 56.25 vs
+# 58.50 x4, p=0.20) and +1.0/78 n.s. on knowledge-update
+# (bench/results/lme_chrono_ku.md). Off: not a finding.
 CHRONO_ORDER = _env("AMI_CHRONO_ORDER", "0") != "0"
 # Newest-first inside each block: the mirror of CHRONO_ORDER, for the
 # knowledge-update case where an old and a replaced value both come back and
