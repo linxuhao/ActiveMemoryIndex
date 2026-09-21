@@ -99,9 +99,39 @@ survives of the State DAG versioning idea is not an ordering. The one ordering
 that this result *does* point at is the existing oldest-first switch, which
 needs its own pre-registration on this subset before it is believed.
 
-## Guards (temporal and LoCoMo)
+## Guards (temporal and LoCoMo) — 2026-09-22, after the gate
 
-The gate has already failed, so the guards cannot ship anything. They are
-still being run, because a global ordering change's effect on the other two
-instruments is a reading this project does not have and the runs cost only
-answering. Recorded below when they finish.
+The gate had already failed; these are readings, not decisions.
+
+**Guard 2, `lme-t` (133 temporal, four replicates against `base1–4`):**
+
+| arm | replicates | mean | vs base |
+|---|---|---:|---:|
+| `base` | 57 · 59 · 60 · 58 | 58.50 | — |
+| `newest` (`tnew1–4`) | 54 · 51 · 51 · 49 | **51.25** | **−7.25 = −5.5pp** |
+
+Complete separation, negative, permutation p = 0.029. Same sign and similar
+size as knowledge-update. Its mirror image, oldest-first, was flat here
+(59 vs 57/59, one replicate). So on this instrument the reader is not
+indifferent to order — it is indifferent to *oldest-first* and hurt by
+newest-first, which is what "last mention wins" would produce on questions
+that ask about the most recent of several dated events.
+
+**Guard 1, LoCoMo `all10v2` (1,540, two replicates against `lc2_base_r1–2`):**
+
+| arm | replicates | mean | vs base |
+|---|---|---:|---:|
+| `base` | 1033 · 1028 | 1030.5 (.669) | — |
+| `newest` | 1025 · 1016 | 1020.5 (.663) | −10.0 = −0.65pp |
+
+Paired: 214 discordant (13.9%, above the ~6% floor), **104 up, 110 down, sign
+test p = 0.73**. Churn without direction — the same shape oldest-first
+produced on temporal. Category 2 (multi-hop) −15.0 is the only bucket with a
+lean (30 up, 44 down); category 4 (single-hop) +5.5 leans the other way.
+
+**Together:** newest-first is significantly worse on both LongMemEval subsets
+(−11.9pp knowledge-update, −5.5pp temporal) and noise on LoCoMo. That is the
+third search-time mechanism whose LongMemEval and LoCoMo readings disagree,
+and again the LoCoMo reading is the flatter one — consistent with the
+session-length account in `lme_fact_evidence.md` (a ~2,600-character chunk
+leaves little for an ordering to reorder), and still not a prediction.
