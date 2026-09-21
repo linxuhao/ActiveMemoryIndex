@@ -221,8 +221,10 @@ EVENT_DATES_ADD_CALL = _env("AMI_EVENT_DATES_ADD_CALL", "0") != "0"
 CHRONO_ORDER = _env("AMI_CHRONO_ORDER", "0") != "0"
 # Newest-first inside each block: the mirror of CHRONO_ORDER, for the
 # knowledge-update case where an old and a replaced value both come back and
-# the reader takes the first one it meets. Arm under measurement
-# (bench/results/newest_first_preregistration.md). CHRONO_ORDER wins if both set.
+# the reader takes the first one it meets. Measured: -9.25/78 on knowledge-update,
+# p=0.029 (bench/results/lme_newest_first.md) -- the reader reads list position as
+# time and takes the LAST mention as current, so newest-first pushes settled
+# answers to older values. Closed; stays 0. CHRONO_ORDER wins if both set.
 NEWEST_FIRST = _env("AMI_NEWEST_FIRST", "0") != "0"
 
 # --- reranking ---------------------------------------------------------------
