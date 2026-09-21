@@ -88,6 +88,33 @@ lifts facts so they can carry their evidence — rather than at abandoning it.
 `AMI_RAW_FIRST` already orders turns ahead of facts *after* selection; whether
 facts also lose the *selection* is not something this project has measured.
 
+## Amendment 2026-09-22 — the gate passed and the veto fired; one more measurement
+
+Recorded in `lme_fact_evidence.md`: LongMemEval end-to-end +5.75 (p=0.029),
+LoCoMo cat1 complete@100 −5.3pp. Per the rule below the arm does not ship.
+The veto's premise — that `complete@k` tracks accuracy — has now inverted
+bucket by bucket, so the conflict is between instruments, not within the data.
+
+**Registered before running:** LoCoMo **end to end** on the rebuilt `all10v2`
+store, `base` and `factev`, two replicates each (retrieve, answer, judge; prefix
+100; n=1540). Decision:
+
+* Paired comparison over questions, mean of two replicates per arm. Sign test
+  on discordant questions, two-sided. The known noise floor on this instrument
+  is ~6pp of discordant pairs (`bench/README.md`), so a difference inside that
+  is read as "no difference", not as a win.
+* **`factev` not significantly worse than `base`** (p ≥ 0.05, or any gain) →
+  the coverage veto measured the wrong thing. The arm is then re-registered
+  under a new gate — *end to end on both corpora* — and ships as
+  `AMI_FACT_EVIDENCE=2` if it clears that gate, which these same numbers would
+  constitute.
+* **`factev` significantly worse** (p < 0.05, negative) → the veto caught a real
+  cross-corpus failure. The arm is closed and the `complete@k` veto stands as
+  the instrument that caught it.
+
+The original rule is not being overturned: it said the arm does not ship on the
+readings it had. It does not. This adds a reading it did not have.
+
 ## Decision rule
 
 Arms differ only in `AMI_FACT_EVIDENCE`: base 0, arm 2. Everything else as
