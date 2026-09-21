@@ -134,6 +134,27 @@ WINDOW_RADIUS = _int("AMI_WINDOW_RADIUS", 1)
 # prompt is what moved the base +1.75 in bench/results/lme_event_dates_add.md.
 # Like the neighbour window this spends slots from the same top_k.
 FACT_EVIDENCE = _int("AMI_FACT_EVIDENCE", 0)
+# Score only extracted facts; verbatim turns stop being candidates for
+# selection. On LoCoMo this had the best retrieval coverage measured anywhere in
+# the project (complete@100 .904 against the shipped .850) and the worst
+# accuracy of any non-degenerate arm (.5127 against .6802) — because that arm
+# also *delivered* facts, and a fact is a lossy paraphrase. Paired with
+# CHUNK_MEMORY it selects with facts and delivers verbatim text.
+# See bench/results/locomo_lost_arms.md.
+FACT_SELECT = _env("AMI_FACT_SELECT", "0") != "0"
+# Return a selected memory as the whole Add chunk it belongs to: that chunk's
+# turns, verbatim and in order, joined into one memory. Chunks dedup, so many
+# facts from one chunk cost one slot.
+#
+# The point is slot arithmetic. A returned memory costs one slot whatever its
+# length and top_k counts memories, so a chunk delivered turn by turn costs ~18
+# slots and a chunk delivered whole costs one. Simulated over the fact ranking,
+# that is complete .558 against .904 at the same top_k=100.
+#
+# Permitted as evidence organisation (docs/cycle2_official_qa_zh.md, Q18) and
+# the weakest possible use of that permission: no text is rewritten, so the
+# query still only selects.
+CHUNK_MEMORY = _env("AMI_CHUNK_MEMORY", "0") != "0"
 
 # Ask the model when each returned memory's event actually happened, then do
 # the arithmetic in code.

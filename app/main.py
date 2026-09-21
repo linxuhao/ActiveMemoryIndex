@@ -226,6 +226,11 @@ def rank(index: store.UserIndex, query: str, options: list[str] | None,
     if recall_question:
         weight = config.RECALL_WEIGHT
         scores = (1.0 - weight) * scores + weight * (index.matrix @ vectors[1])
+    if config.FACT_SELECT:
+        # Verbatim turns stop being candidates and facts do the selecting. The
+        # turns still reach the reader, through the chunk their fact belongs to.
+        turns = np.fromiter((item.kind != "fact" for item in index.items), bool, len(index.items))
+        scores = np.where(turns, -np.inf, scores)
     return scores
 
 
@@ -268,6 +273,22 @@ def evidence(index: store.UserIndex, item: store.Item, scores: np.ndarray) -> li
     return [index.items[row] for row in best]
 
 
+def chunk_memory(index: store.UserIndex, item: store.Item) -> store.Item:
+    """*item*'s whole Add chunk as one memory: its turns, verbatim, in order.
+
+    One slot instead of eighteen. Nothing is rewritten — the content is the
+    stored turns concatenated — so the query still only selects.
+    """
+    digest = item.id.rsplit("-", 1)[0]
+    rows = index.by_chunk.get(digest)
+    if not rows:
+        return item
+    turns = [index.items[row] for row in rows]
+    return store.Item(id=f"{digest}-c0", kind="chunk", parent_id=None,
+                      content="\n".join(turn.content for turn in turns),
+                      created_at=turns[0].created_at)
+
+
 def content_key(item: store.Item) -> str:
     return " ".join(item.content.lower().split())[:120]
 
@@ -276,7 +297,7 @@ def order(chosen: list[tuple[store.Item, float]]) -> None:
     """Sort the selected set in place. Reorders, never adds or drops."""
     if config.RAW_FIRST or config.CHRONO_ORDER:
         chosen.sort(key=lambda pair: (
-            (pair[0].kind != "raw") if config.RAW_FIRST else False,
+            (pair[0].kind not in ("raw", "chunk")) if config.RAW_FIRST else False,
             (pair[0].created_at or "9999") if config.CHRONO_ORDER else "",
         ))
 
@@ -307,6 +328,17 @@ def select(index: store.UserIndex, scores: np.ndarray, top_k: int,
     for position in np.argsort(-scores):
         item = index.items[int(position)]
         score = float(scores[int(position)])
+        # A score of -inf means the item was ruled out of selection, and
+        # argsort puts every one of them last: nothing below here is a
+        # candidate, so stop rather than fill the limit with excluded items.
+        if score == float("-inf"):
+            break
+        if config.CHUNK_MEMORY:
+            # The chunk carries its own neighbours and its own evidence, so
+            # neither expansion runs: they would only re-add what is inside it.
+            if take(chunk_memory(index, item), score):
+                break
+            continue
         if take(item, score):
             break
         # A verbatim turn brings its neighbours, and a fact brings the best
@@ -345,7 +377,7 @@ def startup() -> None:
         log.warning("AMI_AUTH_SCHEME=%r is not a documented scheme; a secret is still "
                     "required, but check your configuration", config.AUTH_SCHEME)
     log.info(
-        "ready: auth=%s embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s raw_first=%s window=%d fact_evidence=%d rerank=%s event_dates=%s cache_max=%d embed_threads=%d",
+        "ready: auth=%s embed=%s llm=%s(%s) return_limit=%d recall_weight=%.2f agentic=%s raw_first=%s window=%d fact_evidence=%d fact_select=%s chunk_memory=%s rerank=%s event_dates=%s cache_max=%d embed_threads=%d",
         config.AUTH_SCHEME,
         config.EMBED_MODEL,
         config.LLM_MODEL if config.llm_available() else "disabled",
@@ -356,6 +388,8 @@ def startup() -> None:
         "on" if config.RAW_FIRST else "off",
         config.WINDOW_RADIUS,
         config.FACT_EVIDENCE,
+        "on" if config.FACT_SELECT else "off",
+        "on" if config.CHUNK_MEMORY else "off",
         config.RERANK_MODEL or "off",
         f"add:{int(config.EVENT_DATES_AT_ADD)}/addcall:{int(config.EVENT_DATES_ADD_CALL)}/stored:{int(config.EVENT_DATES_STORED)}/llm:{int(config.EVENT_DATES)}",
         config.CACHE_MAX_ITEMS,

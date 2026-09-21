@@ -29,7 +29,10 @@ from run_bench import (CHUNK_MESSAGES, OUT, THIRD, _placeholder_httpx, chunk_has
                        completer, post)
 
 DATE_FORMAT = "%Y/%m/%d (%a) %H:%M"
-ITEM_ID = re.compile(r"([0-9a-f]{16})-([rf])(\d+)")
+# "c" is a whole-chunk memory (AMI_CHUNK_MEMORY): it literally contains every
+# turn of its chunk, so unlike a fact it satisfies the strict per-turn
+# measure as well as the generous chunk one.
+ITEM_ID = re.compile(r"([0-9a-f]{16})-([rfc])(\d+)")
 
 
 def dataset_path(name: str) -> Path:
@@ -219,6 +222,8 @@ def report(args) -> None:
             digests.add(match.group(1))
             if match.group(2) == "r":
                 exact.add((match.group(1), match.group(3)))
+            elif match.group(2) == "c":
+                exact |= {pair for pair in gold if pair[0] == match.group(1)}
         # A fact's provenance is its whole chunk, so chunk cover is the generous
         # measure and per-turn is the strict one. Read them as a bracket.
         covered = {pair for pair in gold if pair[0] in digests}
