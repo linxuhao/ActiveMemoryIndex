@@ -106,3 +106,85 @@ Wilcoxon p = 0.007 at a similar run-level separation.
 The four replicates share one retrieval configuration and differ only in answer
 sampling, so complete separation at run level overstates how settled +5.75 is.
 **Trust the direction; do not quote the number.**
+
+---
+
+# 2026-09-22 — LoCoMo end to end: significantly worse. Closed.
+
+The reading registered in the pre-registration's 2026-09-22 amendment.
+`all10v2`, `base` and `factev`, two replicates each, retrieve → answer → judge
+at prefix 100, n=1540.
+
+| arm | replicates | mean | vs base |
+|---|---|---:|---:|
+| `base` | 1033 · 1028 | 1030.5 (.669) | — |
+| `factev` | 1001 · 1006 | 1003.5 (.652) | **−27.0 = −1.75pp** |
+
+Paired over questions: **195 discordant (12.7%, above the ~6% floor), 82 up,
+113 down, sign test two-sided p = 0.031**, negative. 38 questions went 0/2 → 2/2,
+61 went 2/2 → 0/2.
+
+| bucket | n | base | arm | delta | up | down |
+|---|---:|---:|---:|---:|---:|---:|
+| category 1 | 282 | 140.0 | 131.0 | −9.0 | 20 | 30 |
+| category 2 | 321 | 167.5 | 158.5 | −9.0 | 23 | 33 |
+| category 3 | 96 | 47.0 | 43.5 | −3.5 | 3 | 9 |
+| category 4 | 841 | 676.0 | 670.5 | −5.5 | 36 | 41 |
+| needs 1 turn | 1127 | 819.5 | 807.0 | −12.5 | 59 | 72 |
+| needs 2 turns | 225 | 130.0 | 123.0 | −7.0 | 10 | 19 |
+| needs ≥3 turns | 184 | 78.0 | 70.5 | −7.5 | 13 | 22 |
+
+Down in every category and every evidence bucket — including the three-or-more
+bucket, which is where LongMemEval gained most. **The registered rule's second
+branch applies: the veto caught a real cross-corpus failure. The arm is closed.
+`AMI_FACT_EVIDENCE` stays 0.**
+
+## What this actually is
+
+One switch, two corpora, both significant, opposite signs:
+
+| | LongMemEval temporal | LoCoMo |
+|---|---:|---:|
+| end to end | **+5.75 / 133**, p=0.029 | **−27 / 1540**, p=0.031 |
+| complete@100 | +0.8pp (0 on ≥3-turn) | −5.3pp on cat1 |
+| chars per chunk | ~10,900 | ~2,600 |
+
+This is the second mechanism in two days whose sign is set by the corpus rather
+than by the reader (`lme_chunk_memory.md` was the first). The candidate
+explanation — **post hoc, from two points, not to be believed until it predicts
+something** — is the same property both times: session length. In a short
+LoCoMo chunk the neighbour window (±1 around any selected turn) already reaches
+most of the chunk, so the two turns a fact pulls are largely redundant and only
+displace breadth, which is the −5.3pp coverage. In a long LongMemEval session
+the window reaches almost none of it, and a fact's two best turns are evidence
+the reader would otherwise never see.
+
+If that explanation is right it is *testable*, and testable by a rule that
+gates on a **measurable property of the data** rather than on a guess about
+salience: expand only when the fact's chunk is longer than some threshold. That
+is not registered here. It would need its own pre-registration and, per the
+lesson of this file, **end-to-end on both corpora** as the gate, no coverage
+veto.
+
+## Partial retraction of the section above
+
+"What the two results together actually say" claims the veto's premise —
+`complete@k` tracks accuracy — was falsified twice. That was too strong. Within
+LoCoMo, coverage fell and accuracy fell: **the veto and the outcome agree**, and
+the veto did its job. What is falsified is narrower and more useful:
+
+1. a coverage reading on one corpus does not predict accuracy on another
+   (this arm), and
+2. within LongMemEval, coverage and accuracy inverted bucket by bucket
+   (the section "The gain is where the mechanism said it would be" against
+   read 1).
+
+`complete@k` is not unreliable. It is **not portable across corpora**, and on
+this one subset it is not portable across evidence buckets either.
+
+## Consequence for cycle 2
+
+The evaluation is 32 sources. A switch that is +4.3pp on one session-length
+distribution and −1.75pp on another cannot be shipped as a global default on a
+corpus whose distribution is unknown. Any future arm of this shape needs either
+a data-gated rule or evidence on both instruments before it can be turned on.

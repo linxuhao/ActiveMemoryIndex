@@ -139,11 +139,14 @@ WINDOW_RADIUS = _int("AMI_WINDOW_RADIUS", 1)
 # gain exactly where the mechanism predicted: +4.25 on two-evidence
 # questions, +2.00 on three-or-more, -0.50 on single-evidence. It then
 # FAILED its pre-registered veto: LoCoMo cat1 complete@100 fell .596 to
-# .543. Per the rule written before the run it does not ship, and stays 0.
-# The conflict is unresolved rather than settled -- the gate is end-to-end
-# on one corpus and the veto is coverage on another, and coverage has now
-# inverted against accuracy bucket by bucket. See
-# bench/results/lme_fact_evidence.md.
+# .543. Then LoCoMo END TO END confirmed the veto: -27 of 1540, sign test
+# p=0.031, down in every category and every evidence bucket. One switch, two
+# corpora, both significant, opposite signs -- the second mechanism in two
+# days whose sign is set by the corpus (session length, ~10,900 chars per
+# chunk on LongMemEval against ~2,600 on LoCoMo) rather than by the reader.
+# Closed as a global default. A data-gated variant (expand only for long
+# chunks) is the untested follow-up and would need end-to-end on BOTH corpora.
+# See bench/results/lme_fact_evidence.md.
 FACT_EVIDENCE = _int("AMI_FACT_EVIDENCE", 0)
 # Score only extracted facts; verbatim turns stop being candidates for
 # selection. On LoCoMo this had the best retrieval coverage measured anywhere in
