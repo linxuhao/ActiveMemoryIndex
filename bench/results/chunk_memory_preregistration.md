@@ -105,6 +105,43 @@ Four end-to-end replicates each, prefix 100, permutation 4v4 two-sided.
   that rather than shipping both.
 * Never gated on recall@k (`bench/README.md`).
 
+## Amendment 2026-09-22 — the veto fired at the read-before step
+
+Retrieval ran for both arms. The budget veto fires before any accuracy number,
+exactly where the rule said it would, so **neither uncapped arm is answered**:
+
+| arm | memories/q | **chars/q** | all-turns complete |
+|---|---:|---:|---:|
+| `base` (shipped) | 100.0 | **77,263** | 0.924 |
+| `chunkmem` | 36.5 | **398,840** | 1.000 |
+| `factsel` | 35.3 | **397,782** | 1.000 |
+
+Both sit on the `AMI_RETURN_CHAR_BUDGET` ceiling of 400,000 — they are not
+merely large, they are **clipped by it**, which the rule named as disqualifying.
+At the platform that is ~99,700 tokens of an 117,760-token Answer budget: 85% of
+the reader's context spent on memories, and Q18 warns that content over the
+limit is truncated.
+
+Coverage discriminates nothing here, as expected: `base` is already at 1.000
+chunk-complete and 0.924 turn-complete, and `lme_temporal_baseline.md` found
+this subset retrieval-saturated with the loss downstream. The arms buy +7.6pp of
+strict turn completeness for 5.2x the text.
+
+**What is run instead.** One arm, `capsel`: `AMI_FACT_SELECT=1` +
+`AMI_CHUNK_MEMORY=1` + `AMI_RETURN_CHAR_BUDGET=77263`, matched to `base`'s own
+characters per question so the comparison is at equal text and the volume
+confound is removed. Four replicates, same gate, same base.
+
+**Declared before running, so it is not a post-hoc economy:** the delivery-only
+control (`capmem`, `AMI_CHUNK_MEMORY=1` alone at the same budget) is run **only
+if `capsel` clears the gate**. If `capsel` fails there is nothing to attribute.
+
+**Prior against it, stated up front.** `capsel` is `parentcap`'s design with a
+better selector, and `parentcap` lost badly on LoCoMo — .5718 against .6802
+(`locomo_lost_arms.md`). The pincer this arm is testing is real: uncapped is
+vetoed on budget, and capped has already been measured losing on the other
+instrument. A pass would mean the selector is worth more than the cap costs.
+
 ## Prediction
 
 `chunkmem` gains and `factsel` gains slightly more. I expect most of the effect
