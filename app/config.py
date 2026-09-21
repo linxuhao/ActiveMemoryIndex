@@ -219,6 +219,11 @@ EVENT_DATES_ADD_CALL = _env("AMI_EVENT_DATES_ADD_CALL", "0") != "0"
 # whereas relevance order interleaves the two dates among a hundred other
 # memories. Off by default: it is an arm under measurement, not a finding.
 CHRONO_ORDER = _env("AMI_CHRONO_ORDER", "0") != "0"
+# Newest-first inside each block: the mirror of CHRONO_ORDER, for the
+# knowledge-update case where an old and a replaced value both come back and
+# the reader takes the first one it meets. Arm under measurement
+# (bench/results/newest_first_preregistration.md). CHRONO_ORDER wins if both set.
+NEWEST_FIRST = _env("AMI_NEWEST_FIRST", "0") != "0"
 
 # --- reranking ---------------------------------------------------------------
 # Re-read the top candidates with a cross-encoder before selecting. Empty = off.

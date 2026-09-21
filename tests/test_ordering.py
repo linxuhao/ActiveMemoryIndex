@@ -147,14 +147,26 @@ chrono_index.append(chrono_items, np.zeros((len(chrono_items), 4), dtype=np.floa
 # Relevance deliberately disagrees with time: the newest turn scores highest.
 chrono_scores = np.array([0.90, 0.50, 0.70, 0.60, 0.95, 0.55, 0.65], dtype=np.float32)
 
-saved = (config.CHRONO_ORDER, config.WINDOW_RADIUS, config.RAW_FIRST)
+saved = (config.CHRONO_ORDER, config.WINDOW_RADIUS, config.RAW_FIRST, config.NEWEST_FIRST)
 config.WINDOW_RADIUS = 0
 
 config.CHRONO_ORDER = False
 by_relevance = [item.content for item, _ in main.select(chrono_index, chrono_scores, 7)]
 config.CHRONO_ORDER = True
 by_time = [item.content for item, _ in main.select(chrono_index, chrono_scores, 7)]
-config.CHRONO_ORDER, config.WINDOW_RADIUS, config.RAW_FIRST = saved
+config.CHRONO_ORDER = False
+config.NEWEST_FIRST = True
+newest = [item.content for item, _ in main.select(chrono_index, chrono_scores, 7)]
+config.CHRONO_ORDER, config.WINDOW_RADIUS, config.RAW_FIRST, config.NEWEST_FIRST = saved
+
+# AMI_NEWEST_FIRST is the mirror: each block newest-first, undated last, and
+# the raw-first block structure untouched.
+ok &= check(newest[:4] == ["turn 0", "turn 2", "turn 1", "undated turn"],
+            "newest-first: raw block newest to oldest, undated last")
+ok &= check(newest[4:] == ["dated fact (later)", "dated fact (earlier)", "undated fact"],
+            "newest-first: fact block newest to oldest, undated last")
+ok &= check(sorted(newest) == sorted(by_relevance),
+            "newest-first changes order only, never membership")
 
 ok &= check(by_relevance[:4] == ["turn 0", "turn 2", "undated turn", "turn 1"],
             "without the switch the raw block is in relevance order")

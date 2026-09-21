@@ -295,6 +295,9 @@ def content_key(item: store.Item) -> str:
 
 def order(chosen: list[tuple[store.Item, float]]) -> None:
     """Sort the selected set in place. Reorders, never adds or drops."""
+    if config.NEWEST_FIRST:
+        # Stable, so the block sort below keeps each block newest-first inside.
+        chosen.sort(key=lambda pair: pair[0].created_at or "", reverse=True)
     if config.RAW_FIRST or config.CHRONO_ORDER:
         chosen.sort(key=lambda pair: (
             (pair[0].kind not in ("raw", "chunk")) if config.RAW_FIRST else False,
