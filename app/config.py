@@ -235,6 +235,11 @@ NEWEST_FIRST = _env("AMI_NEWEST_FIRST", "0") != "0"
 # real update from same-topic chatter and restatements (hand-judged precision
 # <= 0.20 at every tau on two stores), so it was never run end to end. Kept for
 # an extractor-keyed link. bench/results/supersede_mark_calibration.md
+# Add side: ask the extractor for a canonical "<subject>.<attribute>" key on
+# facts that state the current value of a property that can change, store it,
+# and let SUPERSEDE_MARK link by key equality instead of cosine. Arm under
+# measurement (bench/results/fact_keys_preregistration.md).
+FACT_KEYS = _env("AMI_FACT_KEYS", "0") != "0"
 SUPERSEDE_MARK = _env("AMI_SUPERSEDE_MARK", "0") != "0"
 SUPERSEDE_TAU = float(_env("AMI_SUPERSEDE_TAU", "0.90"))
 

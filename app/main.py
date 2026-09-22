@@ -299,6 +299,20 @@ def superseded(index: store.UserIndex, chosen: list[store.Item]) -> dict[str, st
     SUPERSEDE_TAU. The successor is the latest such fact. A function of the
     store only: the query chose the fact, it does not choose the marker."""
     out: dict[str, str] = {}
+    if config.FACT_KEYS:
+        # By key equality: the latest strictly-later fact carrying the same
+        # canonical key. Unkeyed facts are never marked. The cosine path below
+        # is closed (bench/results/supersede_mark_calibration.md).
+        for item in chosen:
+            if item.kind != "fact" or not item.fact_key or not item.created_at:
+                continue
+            later = [index.items[row] for row in index.by_key.get(item.fact_key, ())
+                     if (index.items[row].created_at or "") > item.created_at]
+            if later:
+                successor = max(later, key=lambda it: it.created_at)
+                out[item.id] = (f"[superseded on {successor.created_at[:10]} by: "
+                                f"{successor.content}] {item.content}")
+        return out
     if index.matrix is None:
         return out
     facts = [row for row, item in enumerate(index.items) if item.kind == "fact" and item.created_at]
@@ -486,9 +500,14 @@ def add(
                 # turn's event happened. Turn n is items[n]: build_items keeps
                 # the two lists aligned.
                 facts, turn_dates = llm.extract_dated(lines)
+                keys = [None] * len(facts)
                 for position, iso in turn_dates.items():
                     if position < len(items):
                         items[position].event_date = iso
+            elif config.FACT_KEYS:
+                keyed = llm.extract_keyed("\n".join(lines))
+                facts = [(fact, None) for fact, _ in keyed]
+                keys = [key for _, key in keyed]
             else:
                 facts = [(fact, None) for fact in llm.extract_facts("\n".join(lines))]
             for position, (fact, happened) in enumerate(facts):
@@ -501,6 +520,7 @@ def add(
                         content=content,
                         created_at=items[0].created_at if items else None,
                         event_date=happened,
+                        fact_key=keys[position] if config.FACT_KEYS else None,
                     )
                 )
         if items and config.EVENT_DATES_ADD_CALL:

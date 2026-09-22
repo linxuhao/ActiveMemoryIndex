@@ -35,6 +35,16 @@ Rules:
 
 Return JSON only: {"facts": ["...", "..."]}. At most %d facts. Return {"facts": []} if there is nothing worth remembering."""
 
+EXTRACT_KEYED_SYSTEM = EXTRACT_SYSTEM.replace(
+    "6. Do not answer questions, summarise, or editorialise. No commentary.",
+    """6. Do not answer questions, summarise, or editorialise. No commentary.
+7. Give a memory a "key" only when it states the CURRENT VALUE of a property that can change later: a count, a time, a place, a status, a level, a price, a name of something owned. The key is "<subject>.<attribute>" in lower snake_case: the subject is "me" for the memory owner or the named person or thing; the attribute is a short stable noun for the property, e.g. "me.team_size", "me.gym_time", "me.instagram_followers", "rachel.location", "me.5k_personal_best". The same property must get exactly the same key every time it comes up. Events, requests, questions, opinions, feelings and plans get null.""",
+).replace(
+    'Return JSON only: {"facts": ["...", "..."]}. At most %d facts. Return {"facts": []} if there is nothing worth remembering.',
+    'Return JSON only: {"facts": [{"text": "...", "key": "me.team_size"}, {"text": "...", "key": null}]}. At most %d facts. Return {"facts": []} if there is nothing worth remembering.',
+)
+assert EXTRACT_KEYED_SYSTEM != EXTRACT_SYSTEM
+
 RECALL_SYSTEM = """You write the memory-check question a person would ask their assistant about their own past conversations.
 
 Given a question that will be answered from someone's personal memory log, write ONE short question in that person's own first-person voice, in the register of a chat log, e.g. "Did I tell you about ...?" or "What did I say about ...?".
@@ -119,6 +129,58 @@ def _parse_facts(text: str) -> list[str]:
         if len(cleaned) > 3:
             facts.append(cleaned)
     return facts[: config.LLM_MAX_FACTS]
+
+
+_KEY_JUNK = re.compile(r"[^a-z0-9._]+")
+
+
+def normalise_key(key) -> str | None:
+    """Lower snake_case '<subject>.<attribute>' or None. Anything that is not a
+    string with letters in it, or that spells null, is no key."""
+    if not isinstance(key, str):
+        return None
+    cleaned = _KEY_JUNK.sub("_", key.strip().lower()).strip("_.")
+    if not cleaned or cleaned in ("null", "none", "n_a", "na") or not re.search(r"[a-z]", cleaned):
+        return None
+    return cleaned
+
+
+def _parse_keyed(text: str) -> list[tuple[str, str | None]]:
+    """The keyed format: {"facts": [{"text": ..., "key": ...}, ...]}. Entries that
+    are plain strings, or replies in the old format, come back with no key."""
+    text = _strip_reasoning(text)
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        try:
+            payload = json.loads(match.group(0))
+            facts = payload.get("facts", [])
+            if isinstance(facts, list):
+                out = []
+                for entry in facts:
+                    if isinstance(entry, dict):
+                        body = str(entry.get("text") or entry.get("fact") or "").strip()
+                        if body:
+                            out.append((body, normalise_key(entry.get("key"))))
+                    elif str(entry).strip():
+                        out.append((str(entry).strip(), None))
+                return out
+        except json.JSONDecodeError:
+            pass
+    return [(fact, None) for fact in _parse_facts(text)]
+
+
+def extract_keyed(chunk_text: str) -> list[tuple[str, str | None]]:
+    """Add path with AMI_FACT_KEYS: (memory, canonical key or None)."""
+    if not config.EXTRACT_ENABLED:
+        return []
+    raw = _complete(EXTRACT_KEYED_SYSTEM % config.LLM_MAX_FACTS, chunk_text, config.LLM_MAX_TOKENS_EXTRACT)
+    if raw is None:
+        return []
+    facts = _parse_keyed(raw)[: config.LLM_MAX_FACTS]
+    if raw and not facts:
+        counters["empty_extractions"] += 1
+        log.warning("keyed extraction returned no usable facts from a %d-char reply", len(raw))
+    return facts
 
 
 def extract_facts(chunk_text: str) -> list[str]:

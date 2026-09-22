@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS items (
     created_at TEXT,
     seq        INTEGER,
     vec        BLOB NOT NULL,
-    event_date TEXT
+    event_date TEXT,
+    fact_key   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_items_user ON items(user_id);
 CREATE TABLE IF NOT EXISTS requests (
@@ -54,6 +55,9 @@ class Item:
     # When the described event happened (YYYY-MM-DD), if the extraction could
     # tell; distinct from created_at, which is when it was said.
     event_date: str | None = None
+    # Canonical "<subject>.<attribute>" from the extractor (AMI_FACT_KEYS), the
+    # attribute this fact states the current value of; None for everything else.
+    fact_key: str | None = None
 
 
 class UserIndex:
@@ -67,6 +71,9 @@ class UserIndex:
         # reason: a selected fact finds the turns it was extracted from without
         # a scan. Raw positions can have gaps, so this is built, not counted.
         self.by_chunk: dict[str, list[int]] = {}
+        # fact key -> rows of the facts carrying it, so a returned fact finds
+        # the later statements of the same attribute without a scan.
+        self.by_key: dict[str, list[int]] = {}
 
     def append(self, items: list[Item], vectors: np.ndarray) -> None:
         for offset, item in enumerate(items):
@@ -74,6 +81,8 @@ class UserIndex:
             self.by_id[item.id] = row
             if item.kind == "raw":
                 self.by_chunk.setdefault(item.id.rsplit("-", 1)[0], []).append(row)
+            elif item.kind == "fact" and item.fact_key:
+                self.by_key.setdefault(item.fact_key, []).append(row)
         self.items.extend(items)
         self.matrix = vectors if self.matrix is None else np.vstack([self.matrix, vectors])
 
@@ -93,6 +102,8 @@ def init() -> None:
         columns = {row[1] for row in _conn.execute("PRAGMA table_info(items)")}
         if "event_date" not in columns:
             _conn.execute("ALTER TABLE items ADD COLUMN event_date TEXT")
+        if "fact_key" not in columns:
+            _conn.execute("ALTER TABLE items ADD COLUMN fact_key TEXT")
         _conn.commit()
 
 
@@ -152,13 +163,14 @@ def add(user_id: str, session_id: str, request_id: str, items: list[Item], vecto
                 seq + offset,
                 vectors[offset].tobytes(),
                 item.event_date,
+                item.fact_key,
             )
             for offset, item in enumerate(items)
         ]
         _conn.executemany(
             "INSERT OR REPLACE INTO items "
-            "(id, user_id, session_id, request_id, kind, parent_id, content, created_at, seq, vec, event_date) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, user_id, session_id, request_id, kind, parent_id, content, created_at, seq, vec, event_date, fact_key) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
         _conn.execute(
@@ -197,11 +209,12 @@ def _load(user_id: str) -> UserIndex:
         return index
     index = UserIndex()
     rows = _conn.execute(
-        "SELECT id, kind, parent_id, content, created_at, vec, event_date FROM items WHERE user_id = ? ORDER BY seq",
+        "SELECT id, kind, parent_id, content, created_at, vec, event_date, fact_key FROM items WHERE user_id = ? ORDER BY seq",
         (user_id,),
     ).fetchall()
     if rows:
-        items = [Item(id=r[0], kind=r[1], parent_id=r[2], content=r[3], created_at=r[4], event_date=r[6])
+        items = [Item(id=r[0], kind=r[1], parent_id=r[2], content=r[3], created_at=r[4], event_date=r[6],
+                      fact_key=r[7])
                  for r in rows]
         matrix = np.vstack([np.frombuffer(r[5], dtype=np.float32) for r in rows])
         index.append(items, matrix)
