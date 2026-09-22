@@ -293,6 +293,39 @@ def content_key(item: store.Item) -> str:
     return " ".join(item.content.lower().split())[:120]
 
 
+def superseded(index: store.UserIndex, chosen: list[store.Item]) -> dict[str, str]:
+    """Map fact id -> rendering with its successor attached, for returned
+    facts that a strictly later fact of the same user resembles at cosine >=
+    SUPERSEDE_TAU. The successor is the latest such fact. A function of the
+    store only: the query chose the fact, it does not choose the marker."""
+    out: dict[str, str] = {}
+    if index.matrix is None:
+        return out
+    facts = [row for row, item in enumerate(index.items) if item.kind == "fact" and item.created_at]
+    if not facts:
+        return out
+    fact_rows = np.asarray(facts)
+    stamps = [index.items[row].created_at for row in facts]
+    for item in chosen:
+        if item.kind != "fact" or not item.created_at:
+            continue
+        row = index.by_id.get(item.id)
+        if row is None:
+            continue
+        later = np.fromiter((stamp > item.created_at for stamp in stamps), bool, len(stamps))
+        if not later.any():
+            continue
+        sims = index.matrix[fact_rows[later]] @ index.matrix[row]
+        hits = np.nonzero(sims >= config.SUPERSEDE_TAU)[0]
+        if hits.size == 0:
+            continue
+        candidates = fact_rows[later][hits]
+        successor = index.items[max(candidates, key=lambda r: index.items[r].created_at)]
+        out[item.id] = (f"[superseded on {successor.created_at[:10]} by: "
+                        f"{successor.content}] {item.content}")
+    return out
+
+
 def order(chosen: list[tuple[store.Item, float]]) -> None:
     """Sort the selected set in place. Reorders, never adds or drops."""
     if config.NEWEST_FIRST:
@@ -548,6 +581,8 @@ def search(
     # this off returns exactly what it returned before.
     redated = (event_indexed([item for item, _ in chosen1])
                if config.EVENT_DATES or config.EVENT_DATES_STORED else {})
+    if config.SUPERSEDE_MARK:
+        redated.update(superseded(index, [item for item, _ in chosen1]))
     data = [
         {
             "id": item.id,

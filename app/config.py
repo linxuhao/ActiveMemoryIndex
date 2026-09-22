@@ -228,6 +228,13 @@ CHRONO_ORDER = _env("AMI_CHRONO_ORDER", "0") != "0"
 # time and takes the LAST mention as current, so newest-first pushes settled
 # answers to older values. Closed; stays 0. CHRONO_ORDER wins if both set.
 NEWEST_FIRST = _env("AMI_NEWEST_FIRST", "0") != "0"
+# Render a returned fact that a later fact of the same user supersedes with
+# that successor attached: "[superseded on <date> by: <successor>] <old>".
+# Computed from the user's store, never from the query; stored text untouched;
+# the old fact is kept. Arm under measurement
+# (bench/results/supersede_mark_preregistration.md). TAU is set by amendment.
+SUPERSEDE_MARK = _env("AMI_SUPERSEDE_MARK", "0") != "0"
+SUPERSEDE_TAU = float(_env("AMI_SUPERSEDE_TAU", "0.90"))
 
 # --- reranking ---------------------------------------------------------------
 # Re-read the top candidates with a cross-encoder before selecting. Empty = off.
