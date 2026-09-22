@@ -237,8 +237,10 @@ NEWEST_FIRST = _env("AMI_NEWEST_FIRST", "0") != "0"
 # an extractor-keyed link. bench/results/supersede_mark_calibration.md
 # Add side: ask the extractor for a canonical "<subject>.<attribute>" key on
 # facts that state the current value of a property that can change, store it,
-# and let SUPERSEDE_MARK link by key equality instead of cosine. Arm under
-# measurement (bench/results/fact_keys_preregistration.md).
+# and let SUPERSEDE_MARK link by key equality instead of cosine. Measured:
+# keyed marking +0.25/78 on knowledge-update, p=1.0 -- closed. The keyed
+# prompt by itself moved the base +2.5 (p=0.029), unregistered, a lead only.
+# bench/results/lme_fact_keys.md
 FACT_KEYS = _env("AMI_FACT_KEYS", "0") != "0"
 SUPERSEDE_MARK = _env("AMI_SUPERSEDE_MARK", "0") != "0"
 SUPERSEDE_TAU = float(_env("AMI_SUPERSEDE_TAU", "0.90"))
