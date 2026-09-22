@@ -26,6 +26,16 @@ check(llm._parse_keyed('{"facts": ["old format", "still works"]}') == [("old for
 check(llm.normalise_key("rachel.location") == "rachel.location" and llm.normalise_key("  ") is None
       and llm.normalise_key(12) is None and llm.normalise_key("123") is None, "normalise_key edge cases")
 
+stray = llm._parse_keyed('{"facts":[{"text":"[2023-07-11] I am planning a trip.","key":null},'
+                         '{"text":"[2023-07-11] I need 125 stars.","key":"me.starbucks_gold_stars"}}]}')
+check(stray == [("[2023-07-11] I am planning a trip.", None), ("[2023-07-11] I need 125 stars.", "me.starbucks_gold_stars")],
+      "a stray closing brace does not lose the chunk's facts")
+mixed = llm._parse_keyed('{"facts":[{"text":"[2023-06-05] I arrived in NYC."},{"text":"per_scholas.cost":"free"},'
+                         '{"text":"[2023-06-05] I am looking for a job."}]}')
+check(mixed == [("[2023-06-05] I arrived in NYC.", None), ("[2023-06-05] I am looking for a job.", None)],
+      "malformed objects are dropped, well-formed ones kept, missing key is None")
+check(llm._parse_keyed("I cannot help with that.") == [], "prose still parses to nothing")
+
 # --- store round trip and index
 def fact(n, text, stamp, key):
     return store.Item(id=f"{'a'*16}-f{n}", kind="fact", parent_id=None, content=text, created_at=stamp, fact_key=key)

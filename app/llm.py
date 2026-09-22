@@ -132,6 +132,8 @@ def _parse_facts(text: str) -> list[str]:
 
 
 _KEY_JUNK = re.compile(r"[^a-z0-9._]+")
+_KEYED_OBJECT = re.compile(
+    r'\{\s*"text"\s*:\s*"(?:[^"\\]|\\.)*"\s*(?:,\s*"key"\s*:\s*(?:null|"(?:[^"\\]|\\.)*"))?\s*\}')
 
 
 def normalise_key(key) -> str | None:
@@ -166,6 +168,20 @@ def _parse_keyed(text: str) -> list[tuple[str, str | None]]:
                 return out
         except json.JSONDecodeError:
             pass
+    # Salvage: gpt-4o-mini sometimes closes the list with a stray brace
+    # ("}}]}") or mixes malformed objects into an otherwise good reply. Each
+    # well-formed {"text": ..., "key": ...} object is taken on its own.
+    salvaged = []
+    for piece in _KEYED_OBJECT.finditer(text):
+        try:
+            entry = json.loads(piece.group(0))
+        except json.JSONDecodeError:
+            continue
+        body = str(entry.get("text") or "").strip()
+        if body:
+            salvaged.append((body, normalise_key(entry.get("key"))))
+    if salvaged:
+        return salvaged
     return [(fact, None) for fact in _parse_facts(text)]
 
 
