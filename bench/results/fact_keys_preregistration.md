@@ -100,3 +100,19 @@ successor link at search time, nothing deleted.
 Versioning at search time is closed in full: three orderings, cosine
 marking, key marking. The remaining move is Add-time consolidation, which
 rewrites stored text and is a different system.
+
+## Amendment 2026-09-22 — smoke done; one format fix; ceiling 3/13
+
+**Format fix, declared.** The first smoke lost 3 of 26 chunks to parse
+failures: gpt-4o-mini closed the list with a stray brace (`}}]}`) twice, and
+once mixed malformed `{"text":"x":"y"}` entries into the reply. The parser
+now salvages each well-formed `{"text", "key"}` object on its own
+(`95fda1f`). The prompt did not change. Second smoke: 0 of 26 parse failures.
+
+**Smoke result (second run).** Keyed on both sides 4/13; **same key 3/13**
+(`031748ae` me.team_size, `59524333` me.gym_time, `6a1eabeb`
+me.5k_personal_best). One disagreement (`b6019101`: me.mcu_films_watched vs
+me.movie_count). Nine pairs unkeyed on at least one side — nearly always the
+**new** statement, the one phrased as an aside, which the extractor keys as
+`null`. Below the 6/13 line: per the rule the arm still runs, and 3/13 is
+the ceiling to read the gate against. Prediction of 8–11 agreement: wrong.
