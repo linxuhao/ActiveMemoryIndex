@@ -231,8 +231,10 @@ NEWEST_FIRST = _env("AMI_NEWEST_FIRST", "0") != "0"
 # Render a returned fact that a later fact of the same user supersedes with
 # that successor attached: "[superseded on <date> by: <successor>] <old>".
 # Computed from the user's store, never from the query; stored text untouched;
-# the old fact is kept. Arm under measurement
-# (bench/results/supersede_mark_preregistration.md). TAU is set by amendment.
+# the old fact is kept. Closed at calibration: no cosine threshold separates a
+# real update from same-topic chatter and restatements (hand-judged precision
+# <= 0.20 at every tau on two stores), so it was never run end to end. Kept for
+# an extractor-keyed link. bench/results/supersede_mark_calibration.md
 SUPERSEDE_MARK = _env("AMI_SUPERSEDE_MARK", "0") != "0"
 SUPERSEDE_TAU = float(_env("AMI_SUPERSEDE_TAU", "0.90"))
 

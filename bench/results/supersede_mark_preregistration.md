@@ -107,3 +107,12 @@ The State DAG's versioning half is closed at search time: ordering (three
 ways) and marking have both been measured. What would remain is Add-time
 consolidation — rewriting the old fact when the new one arrives — which
 changes stored text and is a different kind of system; not registered here.
+
+## Amendment 2026-09-22 — closed at step 3
+
+Calibration ran on `lme-t` and `all10v2` (`supersede_mark_calibration.md`).
+Hand-judged precision of the marks is ≤ 0.20 in every band on both stores;
+the 0.80 bar is not reached at any τ. Per step 3 the arm is closed before
+the knowledge-update run. No τ is chosen; step 4 was not performed as a
+firing read — the 13-pair cosine table in the calibration file was computed
+after closure and used for nothing.
