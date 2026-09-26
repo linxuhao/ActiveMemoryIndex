@@ -92,6 +92,17 @@ plain FTS is the arm to run. If nothing lexical reaches it, this channel has no
 target here and the design stops. Only "answer terms reach it, question terms
 do not" gives the adapter a role.
 
+**Outcome (2026-09-26, `bench/results/key_target_check.md`):** an oracle
+answer key reaches 12 of the 42 never-completed questions (10 beyond question
+terms), 8 under the union rule this section's design implies — 2.8% of 351 on
+completeness, before the adapter's own emission rate and the reader's ~1/5
+conversion. Expected end-to-end ≈ 1–2 questions against ~23 of replicate
+noise. Of the 34 out of reach, 17 fail on precision (answer terms are common
+words) and 17 on reach (the turn's content is anaphoric — "I've had them for 3
+years"). **Search-time key arm: not built. Application: not submitted on this
+evidence; §7 stays a draft.** Re-run the script on an entity-heavy corpus
+before reopening.
+
 ## 6. Cost and operations
 
 * Users: LongMemEval-S is one haystack per question (~500 `user_id`s per 500

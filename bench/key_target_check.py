@@ -43,6 +43,29 @@ def tokens(text: str) -> set[str]:
     return {t for t in TOKEN.findall(text.lower()) if len(t) >= 3 and t not in STOP}
 
 
+def stem(t: str) -> str:
+    for suf in ("ing", "ed", "es", "s"):
+        if len(t) > len(suf) + 3 and t.endswith(suf):
+            return t[: -len(suf)]
+    return t
+
+
+def overlap(a: set[str], b: set[str], generous: bool) -> bool:
+    """Declared deviation (2026-09-26, after the first run): LoCoMo gold answers
+    contain glued words ("threeturtles", "localzoo") and the strict rule has no
+    stemming ("turtles" vs "turtle"). Generous mode stems both sides and also
+    accepts a >=4-char token of one side contained in a token of the other.
+    Strict results are still reported; generous is the upper bound."""
+    if a & b:
+        return True
+    if not generous:
+        return False
+    sa, sb = {stem(t) for t in a}, {stem(t) for t in b}
+    if sa & sb:
+        return True
+    return any(len(x) >= 4 and len(y) >= 4 and (x in y or y in x) for x in sa for y in sb)
+
+
 def turn_texts(sample: dict) -> dict[str, str]:
     conversation = sample["conversation"]
     out = {}
@@ -65,6 +88,12 @@ def main() -> None:
     ap.add_argument("--slots", type=int, default=30)
     ap.add_argument("--rare", type=float, default=0.05)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--generous", action="store_true")
+    ap.add_argument("--window", type=int, default=0,
+                    help="declared extension (2026-09-26, after the first run): count a missing turn as "
+                         "reached when it or a same-session neighbour within this radius is hit — the shipped "
+                         "system returns WINDOW_RADIUS=1 neighbours of every selected turn — and charge the "
+                         "neighbours to the hit set, since they consume slots")
     args = ap.parse_args()
 
     chunks = json.loads((OUT / (args.chunks or args.base) / "chunks.json").read_text(encoding="utf-8"))
@@ -85,8 +114,19 @@ def main() -> None:
         n = len(toks[conv])
         return {t for t in ts if df[conv][t] <= max(1, args.rare * n)}
 
+    def neighbours(d: str) -> set[str]:
+        m = re.fullmatch(r"D(\d+):(\d+)", d)
+        if not m or args.window <= 0:
+            return {d}
+        s, i = int(m.group(1)), int(m.group(2))
+        return {f"D{s}:{j}" for j in range(i - args.window, i + args.window + 1) if j >= 1}
+
     def hits(conv: int, keys: set[str]) -> set[str]:
-        return {d for d, ts in toks[conv].items() if ts & keys}
+        direct = {d for d, ts in toks[conv].items() if overlap(ts, keys, args.generous)}
+        return set().union(*(neighbours(d) for d in direct)) & set(toks[conv]) if direct else set()
+
+    def reached(conv: int, d: str, keys: set[str]) -> bool:
+        return any(overlap(toks[conv].get(n, set()), keys, args.generous) for n in neighbours(d))
 
     rows = []
     for qid, b in base.items():
@@ -111,9 +151,9 @@ def main() -> None:
             text = texts[conv].get(d, "")
             per_turn.append({
                 "dia": d,
-                "t1": bool(tt & qt),
-                "t1r": bool(tt & qr),
-                "t2": (answer.lower() in text.lower() and bool(answer.strip())) or bool(tt & at),
+                "t1": reached(conv, d, qt),
+                "t1r": reached(conv, d, qr),
+                "t2": (answer.lower() in text.lower() and bool(answer.strip())) or reached(conv, d, at),
                 "t2_verbatim": bool(answer.strip()) and answer.lower() in text.lower(),
             })
         hit_t1r = hits(conv, qr)
