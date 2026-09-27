@@ -1,0 +1,3 @@
+kdcip1 {'calls': 502, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 0, 'dci_tool_calls': 285, 'dci_refused': 90, 'dci_seconds': 351.9879909167066}
+kdcip2 {'calls': 500, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 0, 'dci_tool_calls': 282, 'dci_refused': 93, 'dci_seconds': 349.2839973401278}
+kdcip3 {'calls': 498, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 0, 'dci_tool_calls': 287, 'dci_refused': 88, 'dci_seconds': 347.1105305395322}

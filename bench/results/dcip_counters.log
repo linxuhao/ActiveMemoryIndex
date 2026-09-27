@@ -1,0 +1,14 @@
+kdcip1 {'calls': 590, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 0, 'dci_tool_calls': 326, 'dci_refused': 137, 'dci_seconds': 385.4009781795321}
+kdcip2 {'calls': 590, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 0, 'dci_tool_calls': 332, 'dci_refused': 134, 'dci_seconds': 409.5325652883621}
+kdcip3 {'calls': 590, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 0, 'dci_tool_calls': 325, 'dci_refused': 134, 'dci_seconds': 410.02032371249516}
+kdcip4 {'calls': 605, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 0, 'dci_tool_calls': 341, 'dci_refused': 137, 'dci_seconds': 432.0447892679367}
+kdcipfill1 {'calls': 587, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 0, 'dci_tool_calls': 321, 'dci_refused': 135, 'dci_seconds': 403.5913004488684}
+kdcipfill2 {'calls': 602, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 0, 'dci_tool_calls': 343, 'dci_refused': 134, 'dci_seconds': 415.72790606936906}
+kdcipfill3 {'calls': 599, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 0, 'dci_tool_calls': 333, 'dci_refused': 139, 'dci_seconds': 401.99290892935824}
+kdcipfill4 {'calls': 576, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 0, 'dci_tool_calls': 327, 'dci_refused': 122, 'dci_seconds': 391.6071386456024}
+lc-dcip {'calls': 2620, 'failures': 0, 'dci_searches': 351, 'dci_fallbacks': 0, 'dci_empty': 6, 'dci_tool_calls': 1670, 'dci_refused': 332, 'dci_seconds': 1934.0465538875433}
+lc-dcipfill {'calls': 2657, 'failures': 0, 'dci_searches': 351, 'dci_fallbacks': 0, 'dci_empty': 2, 'dci_tool_calls': 1694, 'dci_refused': 347, 'dci_seconds': 1895.334689142066}
+tdcip1 {'calls': 958, 'failures': 0, 'dci_searches': 133, 'dci_fallbacks': 0, 'dci_empty': 2, 'dci_tool_calls': 810, 'dci_refused': 79, 'dci_seconds': 746.7964667963097}
+tdcip2 {'calls': 954, 'failures': 0, 'dci_searches': 133, 'dci_fallbacks': 0, 'dci_empty': 1, 'dci_tool_calls': 802, 'dci_refused': 75, 'dci_seconds': 717.1726147478912}
+tdcip3 {'calls': 922, 'failures': 0, 'dci_searches': 133, 'dci_fallbacks': 0, 'dci_empty': 3, 'dci_tool_calls': 758, 'dci_refused': 70, 'dci_seconds': 674.1243042612914}
+tdcip4 {'calls': 966, 'failures': 0, 'dci_searches': 133, 'dci_fallbacks': 0, 'dci_empty': 2, 'dci_tool_calls': 802, 'dci_refused': 81, 'dci_seconds': 715.515748514561}
