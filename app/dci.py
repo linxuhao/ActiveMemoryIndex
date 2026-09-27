@@ -18,7 +18,7 @@ import time
 from . import config, llm, store
 
 log = logging.getLogger("ami.dci")
-counters = {"searches": 0, "fallbacks": 0, "empty": 0, "tool_calls": 0, "seconds": 0.0}
+counters = {"searches": 0, "fallbacks": 0, "empty": 0, "tool_calls": 0, "refused": 0, "seconds": 0.0}
 
 SYSTEM = """You are a search agent over one person's memory. The memory is a set of files: one file per conversation chunk, each line a verbatim message between the person ("I") and their assistant, prefixed with the line's id and timestamp, in order; plus a file named facts holding first-person facts extracted from those conversations, each prefixed with its id and the date it was said.
 
@@ -31,7 +31,11 @@ Guidance:
 - Values change over time. If the same thing was stated more than once, read the timestamps: return the latest statement and leave out superseded ones — unless the question asks about the past, or the later statement is relative to the earlier one (e.g. "one more"), in which case return both.
 - Include the neighbouring turns needed to understand a line (what "it", "them", "there" refer to; the assistant's reply that confirms a detail).
 - Prefer verbatim message lines over facts lines when both say the same thing; include a facts line when it states something the messages only imply.
-- Stop as soon as you have the evidence. Call finish with at most {limit} ids. If you truly find nothing relevant, call finish with the closest lines you saw rather than an empty list."""
+{stopping}"""
+
+STOP_EARLY = "- Stop as soon as you have the evidence. Call finish with at most {limit} ids. If you truly find nothing relevant, call finish with the closest lines you saw rather than an empty list."
+PERSIST = "- Do not stop at the first match. After every hit, grep again for the subject of that hit (its noun, name, number, or a synonym) with context, to find later restatements or updates of the same thing; read around a hit when a pronoun is unresolved. Finish only once the value you found has been checked for later updates. You have {budget} tool calls; use as many as the question needs. Call finish with at most {limit} ids. If you truly find nothing relevant, call finish with the closest lines you saw rather than an empty list."
+REFUSED = "Not yet: {done} of at least {need} searches done. Grep the subject of your best hit again, with context, to check for a later restatement or update; then finish."
 
 TOOLS = [
     {"type": "function", "function": {
@@ -177,6 +181,12 @@ def _assistant_message(reply: dict) -> dict:
     return message
 
 
+def system_prompt(limit: int) -> str:
+    stopping = PERSIST if config.DCI_MIN_CALLS > 0 else STOP_EARLY
+    return (SYSTEM.replace("{stopping}", stopping)
+            .replace("{limit}", str(limit)).replace("{budget}", str(config.DCI_BUDGET)))
+
+
 def run(index: store.UserIndex, query: str, options: list[str] | None, limit: int) -> list[store.Item] | None:
     """Return the items the agent chose, in its order, or None when the agent
     could not run (API failure, no finish): the caller falls back."""
@@ -185,7 +195,7 @@ def run(index: store.UserIndex, query: str, options: list[str] | None, limit: in
     corpus = Corpus(index)
     question = query if not options else query + "\nOptions:\n" + "\n".join(options)
     messages = [
-        {"role": "system", "content": SYSTEM.replace("{limit}", str(limit))},
+        {"role": "system", "content": system_prompt(limit)},
         {"role": "user", "content": f"Files:\n{corpus.listing()}\n\nQuestion: {question}"},
     ]
     calls = 0
@@ -207,6 +217,14 @@ def run(index: store.UserIndex, query: str, options: list[str] | None, limit: in
             for call in reply["tool_calls"]:
                 args = _args(call["arguments"])
                 if call["name"] == "finish":
+                    if not forced and calls < config.DCI_MIN_CALLS:
+                        # Persistent searcher: too few probes yet. The refusal
+                        # counts toward the budget so the loop still ends.
+                        calls += 1
+                        counters["refused"] += 1
+                        messages.append({"role": "tool", "tool_call_id": call["id"],
+                                         "content": REFUSED.format(done=calls - 1, need=config.DCI_MIN_CALLS)})
+                        continue
                     ids = args.get("ids") or []
                     picked: list[store.Item] = []
                     seen: set[str] = set()

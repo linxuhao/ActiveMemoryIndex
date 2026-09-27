@@ -256,6 +256,10 @@ DCI_SEARCH = _env("AMI_DCI_SEARCH", "0") != "0"
 DCI_FILL = _env("AMI_DCI_FILL", "0") != "0"
 # Tool calls the agent may make before it is told to finish.
 DCI_BUDGET = _int("AMI_DCI_BUDGET", 12)
+# Persistent searcher (bench/results/dci_persistent_preregistration.md): with
+# N > 0 the early-stop instruction is dropped and a finish before N tool calls
+# is refused (the refusal counts toward the budget). 0 = finish whenever.
+DCI_MIN_CALLS = _int("AMI_DCI_MIN_CALLS", 0)
 DCI_GREP_HITS = _int("AMI_DCI_GREP_HITS", 20)
 DCI_READ_LINES = _int("AMI_DCI_READ_LINES", 40)
 DCI_MAX_TOKENS = _int("AMI_DCI_MAX_TOKENS", 600)

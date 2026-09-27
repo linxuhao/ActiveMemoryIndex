@@ -105,6 +105,37 @@ check(dci.run(index, "q", None, limit=5) is None, "a model that will not use too
 llm.chat_tools = scripted()
 check(dci.run(index, "q", None, limit=5) is None, "an API failure yields None")
 
+# --- persistent searcher (AMI_DCI_MIN_CALLS) ----------------------------------
+check("Stop as soon as" in dci.system_prompt(5) and "later restatements" not in dci.system_prompt(5),
+      "min calls 0: the early-stop instruction stands")
+config.DCI_MIN_CALLS = 2
+check("Stop as soon as" not in dci.system_prompt(5) and "later restatements" in dci.system_prompt(5)
+      and f"You have {config.DCI_BUDGET} tool calls" in dci.system_prompt(5),
+      "min calls > 0: early stop dropped, persistence and budget stated")
+llm.chat_tools = scripted(
+    {"content": "", "tool_calls": [tool("grep", pattern="gym")]},
+    {"content": "", "tool_calls": [tool("finish", ids=[f"{A}-r0"])]},          # refused: 1 of 2
+    {"content": "", "tool_calls": [tool("grep", pattern="gym time", context=1)]},
+    {"content": "", "tool_calls": [tool("finish", ids=[f"{B}-r0"])]},          # accepted: 3 calls done
+)
+before_refused, before_calls = dci.counters["refused"], dci.counters["tool_calls"]
+picked = dci.run(index, "What time do I go to the gym?", None, limit=5)
+refusal = [m for m in llm.chat_tools.seen[-1][0] if m.get("role") == "tool" and m["content"].startswith("Not yet")]
+check([it.id for it in picked] == [f"{B}-r0"] and len(refusal) == 1 and "1 of at least 2" in refusal[0]["content"],
+      "a finish before the minimum is refused with the reason, and the later finish is accepted")
+check(dci.counters["refused"] == before_refused + 1 and dci.counters["tool_calls"] == before_calls + 2,
+      "refusals are counted apart from grep/read tool calls")
+config.DCI_BUDGET, config.DCI_MIN_CALLS = 1, 3
+llm.chat_tools = scripted(
+    {"content": "", "tool_calls": [tool("grep", pattern="cat")]},
+    {"content": "", "tool_calls": [tool("finish", ids=[f"{B}-r2"])]},
+)
+picked = dci.run(index, "What is my cat called?", None, limit=5)
+check([it.id for it in picked] == [f"{B}-r2"] and llm.chat_tools.seen[-1][2] == dci.FORCE_FINISH,
+      "at the budget the forced finish is accepted even below the minimum")
+config.DCI_BUDGET = saved[2]
+config.DCI_MIN_CALLS = 0
+
 # --- through search(): membership and the fill arm -----------------------------
 saved_main = (main.rank, store.get, config.AUTH_SCHEME, config.WINDOW_RADIUS, config.DCI_SEARCH,
               config.DCI_FILL, config.FACT_EVIDENCE)
