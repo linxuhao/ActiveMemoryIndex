@@ -106,6 +106,36 @@ def _complete(system: str, user: str, max_tokens: int) -> str | None:
         return None
 
 
+def chat_tools(messages: list[dict], tools: list[dict], max_tokens: int,
+               tool_choice: str | dict | None = None) -> dict | None:
+    """One chat turn with function calling. Returns {"content": str,
+    "tool_calls": [{"id", "name", "arguments"}]} or None on failure. Used by
+    the direct-corpus-interaction agent (app/dci.py); tests replace it."""
+    if not config.llm_available():
+        return None
+    counters["calls"] += 1
+    try:
+        with _gate:
+            response = _get_client().chat.completions.create(
+                model=config.LLM_MODEL,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice or "auto",
+                temperature=0,
+                max_tokens=max_tokens,
+            )
+        message = response.choices[0].message
+        calls = []
+        for call in message.tool_calls or []:
+            calls.append({"id": call.id, "name": call.function.name,
+                          "arguments": call.function.arguments or "{}"})
+        return {"content": _strip_reasoning(message.content or ""), "tool_calls": calls}
+    except Exception as exc:
+        counters["failures"] += 1
+        log.warning("llm tool call failed: %s", exc)
+        return None
+
+
 def _parse_facts(text: str) -> list[str]:
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if match:

@@ -245,6 +245,21 @@ FACT_KEYS = _env("AMI_FACT_KEYS", "0") != "0"
 SUPERSEDE_MARK = _env("AMI_SUPERSEDE_MARK", "0") != "0"
 SUPERSEDE_TAU = float(_env("AMI_SUPERSEDE_TAU", "0.90"))
 
+# --- direct corpus interaction ------------------------------------------------
+# Replace the embedding selection with a gpt-4o-mini agent that greps and reads
+# the user's stored turns and facts, then names the memory ids to return. The
+# agent never emits text; /search still returns stored items only. Arm
+# pre-registered in bench/results/dci_search_preregistration.md.
+DCI_SEARCH = _env("AMI_DCI_SEARCH", "0") != "0"
+# 0: return exactly the agent's ids. 1: the agent's ids first, then the
+# ordinary embedding selection fills the remaining slots.
+DCI_FILL = _env("AMI_DCI_FILL", "0") != "0"
+# Tool calls the agent may make before it is told to finish.
+DCI_BUDGET = _int("AMI_DCI_BUDGET", 12)
+DCI_GREP_HITS = _int("AMI_DCI_GREP_HITS", 20)
+DCI_READ_LINES = _int("AMI_DCI_READ_LINES", 40)
+DCI_MAX_TOKENS = _int("AMI_DCI_MAX_TOKENS", 600)
+
 # --- reranking ---------------------------------------------------------------
 # Re-read the top candidates with a cross-encoder before selecting. Empty = off.
 #

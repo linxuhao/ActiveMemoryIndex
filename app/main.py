@@ -10,7 +10,7 @@ import numpy as np
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import config, embed, llm, rerank, store
+from . import config, dci, embed, llm, rerank, store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("ami")
@@ -460,6 +460,7 @@ def health(
     except HTTPException:
         return {"status": "ok"}
     counters = dict(llm.counters)
+    counters.update({f"dci_{key}": value for key, value in dci.counters.items()})
     calls, failures = counters["calls"], counters["failures"]
     # "llm: true" only says a key is configured. A key that 401s on every call
     # reported healthy right through a quota outage, so say so out loud.
@@ -596,6 +597,27 @@ def search(
                 # reach evidence the first one missed, and averaging would
                 # dilute exactly those items back below the cut.
                 chosen1 = select(index, np.maximum(scores1, scores2), request.top_k)
+
+    # Direct corpus interaction: an agent greps and reads the store and names
+    # the ids to return. It replaces the selection above (arm `dci`) or leads
+    # it (arm `dcifill`); on any failure the selection above stands.
+    if config.DCI_SEARCH and config.llm_available():
+        limit = min(request.top_k, config.RETURN_LIMIT)
+        picked = dci.run(index, request.query, request.options, limit)
+        if picked is None:
+            dci.counters["fallbacks"] += 1
+        else:
+            agent = [(item, 1.0 - position / 1000.0) for position, item in enumerate(picked)]
+            if config.DCI_FILL and len(agent) < limit:
+                spent = sum(len(item.content) for item, _ in agent)
+                fill = select(index, scores1, request.top_k,
+                              limit_override=limit - len(agent),
+                              exclude={content_key(item) for item, _ in agent},
+                              budget_override=config.RETURN_CHAR_BUDGET - spent)
+                order(fill)
+                chosen1 = agent + fill
+            else:
+                chosen1 = agent
 
     # Re-rendered on the way out; the stored text is never rewritten, so turning
     # this off returns exactly what it returned before.
