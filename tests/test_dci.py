@@ -125,6 +125,17 @@ check([it.id for it in picked] == [f"{B}-r0"] and len(refusal) == 1 and "1 of at
       "a finish before the minimum is refused with the reason, and the later finish is accepted")
 check(dci.counters["refused"] == before_refused + 1 and dci.counters["tool_calls"] == before_calls + 2,
       "refusals are counted apart from grep/read tool calls")
+llm.chat_tools = scripted(
+    {"content": "", "tool_calls": [tool("grep", pattern="gym")]},
+    {"content": "", "tool_calls": [tool("finish", ids=[f"{A}-r0"])]},          # refused: 1 of 2
+    {"content": "", "tool_calls": [tool("finish", ids=[f"{A}-r0"])]},          # refused again: still 1 of 2
+    {"content": "", "tool_calls": [tool("grep", pattern="6 pm")]},
+    {"content": "", "tool_calls": [tool("finish", ids=[f"{B}-r0"])]},          # accepted: 2 probes
+)
+picked = dci.run(index, "What time do I go to the gym?", None, limit=5)
+refusal = [m for m in llm.chat_tools.seen[-1][0] if m.get("role") == "tool" and m["content"].startswith("Not yet")]
+check([it.id for it in picked] == [f"{B}-r0"] and len(refusal) == 2 and all("1 of at least 2" in m["content"] for m in refusal),
+      "a refused finish counts toward the budget, not toward the minimum")
 config.DCI_BUDGET, config.DCI_MIN_CALLS = 1, 3
 llm.chat_tools = scripted(
     {"content": "", "tool_calls": [tool("grep", pattern="cat")]},

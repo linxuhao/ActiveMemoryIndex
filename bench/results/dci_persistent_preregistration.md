@@ -110,3 +110,17 @@ search. LoCoMo `dcip` 200 (−20), `dcipfill` +20 (holds). Temporal `dcip`
 
 A searcher stronger than gpt-4o-mini; more than one value of N; any change
 to grep/read caps; `dcipfill` on temporal.
+
+## Amendment 1 (2026-09-28, declared before any accuracy was read against the rules)
+
+The first build counted a refused `finish` toward the minimum as well as
+toward the budget, so a search could do 3 probes + 1 refused finish and then
+finish. That contradicts the mechanism as written above ("a `finish` issued
+before `N` tool calls is refused"; refusals count toward the *budget*). Seen
+in the counters after two KU replicates: 3.65 probes per search, 1.15
+refusals per search. The run was stopped during `kdcip4`. Fix: the minimum
+now counts grep/read probes only; refusals still spend the budget (test:
+"a refused finish counts toward the budget, not toward the minimum"). The
+three finished replicates are kept as `kdcip1_v0 … kdcip3_v0` (56 · 55 · 58,
+mean 56.3 — recorded here, not used in any table) and the run restarts from
+`kdcip1` under the same tags with the fixed build. Prediction unchanged.

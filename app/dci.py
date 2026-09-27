@@ -198,7 +198,8 @@ def run(index: store.UserIndex, query: str, options: list[str] | None, limit: in
         {"role": "system", "content": system_prompt(limit)},
         {"role": "user", "content": f"Files:\n{corpus.listing()}\n\nQuestion: {question}"},
     ]
-    calls = 0
+    calls = 0     # everything that spends the budget, refusals included
+    probes = 0    # grep/read only: what the minimum counts
     nudged = False
     try:
         while True:
@@ -217,13 +218,14 @@ def run(index: store.UserIndex, query: str, options: list[str] | None, limit: in
             for call in reply["tool_calls"]:
                 args = _args(call["arguments"])
                 if call["name"] == "finish":
-                    if not forced and calls < config.DCI_MIN_CALLS:
+                    if not forced and probes < config.DCI_MIN_CALLS:
                         # Persistent searcher: too few probes yet. The refusal
-                        # counts toward the budget so the loop still ends.
+                        # counts toward the budget (so the loop still ends),
+                        # not toward the minimum.
                         calls += 1
                         counters["refused"] += 1
                         messages.append({"role": "tool", "tool_call_id": call["id"],
-                                         "content": REFUSED.format(done=calls - 1, need=config.DCI_MIN_CALLS)})
+                                         "content": REFUSED.format(done=probes, need=config.DCI_MIN_CALLS)})
                         continue
                     ids = args.get("ids") or []
                     picked: list[store.Item] = []
@@ -239,6 +241,7 @@ def run(index: store.UserIndex, query: str, options: list[str] | None, limit: in
                         counters["empty"] += 1
                     return picked
                 calls += 1
+                probes += 1
                 counters["tool_calls"] += 1
                 if call["name"] == "grep":
                     result = corpus.grep(str(args.get("pattern", "")), args.get("context", 0))
