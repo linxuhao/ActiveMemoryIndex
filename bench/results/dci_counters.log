@@ -1,0 +1,14 @@
+kdci1 {'calls': 284, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 3, 'dci_tool_calls': 138, 'dci_seconds': 165.7299539115047}
+kdci2 {'calls': 296, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 2, 'dci_tool_calls': 154, 'dci_seconds': 181.54107340308838}
+kdci3 {'calls': 298, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 2, 'dci_tool_calls': 151, 'dci_seconds': 179.23301660001744}
+kdci4 {'calls': 299, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 3, 'dci_tool_calls': 158, 'dci_seconds': 185.36035092908423}
+kdcifill1 {'calls': 298, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 2, 'dci_tool_calls': 157, 'dci_seconds': 187.45151195081417}
+kdcifill2 {'calls': 301, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 2, 'dci_tool_calls': 157, 'dci_seconds': 198.21150978270452}
+kdcifill3 {'calls': 299, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 3, 'dci_tool_calls': 158, 'dci_seconds': 184.88857418310363}
+kdcifill4 {'calls': 286, 'failures': 0, 'dci_searches': 78, 'dci_fallbacks': 0, 'dci_empty': 3, 'dci_tool_calls': 137, 'dci_seconds': 171.58557314879727}
+lc-dci {'calls': 1843, 'failures': 0, 'dci_searches': 351, 'dci_fallbacks': 0, 'dci_empty': 5, 'dci_tool_calls': 1211, 'dci_seconds': 1271.028441744973}
+lc-dcifill {'calls': 1897, 'failures': 0, 'dci_searches': 351, 'dci_fallbacks': 0, 'dci_empty': 4, 'dci_tool_calls': 1270, 'dci_seconds': 1303.1249422779074}
+tdci1 {'calls': 664, 'failures': 0, 'dci_searches': 133, 'dci_fallbacks': 0, 'dci_empty': 2, 'dci_tool_calls': 589, 'dci_seconds': 498.80630732141435}
+tdci2 {'calls': 679, 'failures': 0, 'dci_searches': 133, 'dci_fallbacks': 0, 'dci_empty': 6, 'dci_tool_calls': 590, 'dci_seconds': 527.4085966981947}
+tdci3 {'calls': 701, 'failures': 0, 'dci_searches': 133, 'dci_fallbacks': 0, 'dci_empty': 3, 'dci_tool_calls': 623, 'dci_seconds': 534.3709411602467}
+tdci4 {'calls': 675, 'failures': 0, 'dci_searches': 133, 'dci_fallbacks': 0, 'dci_empty': 3, 'dci_tool_calls': 580, 'dci_seconds': 492.5041696309345}
