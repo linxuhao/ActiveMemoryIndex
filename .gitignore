@@ -9,3 +9,4 @@ data/
 bench/out/
 bench/third_party/
 CLAUDE.md
+.env.academic

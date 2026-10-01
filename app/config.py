@@ -35,7 +35,9 @@ def _float(name: str, default: float) -> float:
 DB_PATH = _env("AMI_DB_PATH", "/data/memory.sqlite3")
 
 # --- embedding model ---------------------------------------------------------
-EMBED_MODEL = _env("AMI_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
+EMBED_BACKEND = _env("AMI_EMBED_BACKEND", "bge").lower()
+EMBED_MODEL = _env("AMI_EMBED_MODEL", "text-embedding-v4" if EMBED_BACKEND == "openai"
+                   else "BAAI/bge-small-en-v1.5")
 EMBED_DEVICE = _env("AMI_EMBED_DEVICE", "cpu")
 # Intra-op threads for the embedder. One is right whenever the server is already
 # serving requests concurrently: the platform sends 16-64 at a time, so each of
@@ -44,7 +46,14 @@ EMBED_DEVICE = _env("AMI_EMBED_DEVICE", "cpu")
 # 16 concurrent Add-shaped calls (44 texts): 3.61/s at 8 threads, 4.53/s at 1.
 # Search-shaped calls (2 texts, 32 concurrent): 70.4/s at 8, 101.8/s at 1.
 EMBED_THREADS = _int("AMI_EMBED_THREADS", 1)
-EMBED_BATCH = _int("AMI_EMBED_BATCH", 64)
+EMBED_BATCH = _int("AMI_EMBED_BATCH", 10 if EMBED_BACKEND == "openai" else 64)
+# Separate credentials and endpoint: never inherit the LLM's OpenAI key/URL.
+EMBED_API_KEY = _env("AMI_EMBED_API_KEY") or _env("DASHSCOPE_API_KEY")
+EMBED_BASE_URL = _env("AMI_EMBED_BASE_URL")
+EMBED_DIMENSIONS = _int("AMI_EMBED_DIMENSIONS", 1024)
+EMBED_TIMEOUT = _float("AMI_EMBED_TIMEOUT", 25.0)
+EMBED_RETRIES = _int("AMI_EMBED_RETRIES", 1)
+EMBED_CONCURRENCY = _int("AMI_EMBED_CONCURRENCY", 8)
 
 # --- LLM (competition rule: must be gpt-4o-mini for a leaderboard run) --------
 LLM_MODEL = _env("AMI_LLM_MODEL", "gpt-4o-mini")

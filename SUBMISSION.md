@@ -1,17 +1,26 @@
 # Submission notes — Agent Memory Challenge 2026
 
-Paste-ready materials for the evaluation access request. Keep in sync with `README.md`.
+Release metadata and technical notes. Keep in sync with `README.md` and `RELEASE.md`.
+
+On 2026-10-01 the user reported submitting the access application. Approval/Eval Key is
+pending; no issued credential or approval receipt has been independently verified. Official
+platform Smoke and Full have not run. The platform's concrete Answer/Eval models are not
+confirmed; public materials do not establish a DeepSeek model switch.
+
+Historical numerical results below use BGE and local answer/judge runs. They are not v4
+benchmark results or official leaderboard scores. This release has functional integration
+validation and makes no v4 quality-gain claim.
 
 | field | value |
 |---|---|
 | System name | ActiveMemoryIndex |
-| Version | 1.1.0 (code pinned at `52ddad5`) |
+| Version | `academic-v4-20261001`; public tag identifies the fixed release commit |
 | Evaluation type | Textual Memory |
 | Division / route | Academic Methods · API (self-hosted) |
 | Repository | https://github.com/linxuhao/ActiveMemoryIndex |
-| Endpoint URL | `https://amindex.linxuhao.app` (HTTPS, Cloudflare, stable ≥30 days) |
+| Endpoint URL | `https://amindex.linxuhao.app` (HTTPS, Cloudflare; see the GitHub release notes for deployment verification) |
 | Contact | Xuhao Lin · linxuhao84@gmail.com · independent researcher |
-| Model used by Add and Search | `gpt-4o-mini` (only model in the system; the embedder is a local `bge-small-en-v1.5`) |
+| Models used by Add and Search | `gpt-4o-mini` for extraction/recall; remote `text-embedding-v4`, 1024 dimensions, for embeddings |
 
 ## Key flow
 
@@ -37,35 +46,57 @@ deployment and shared with the platform through the access-request flow (stored 
 ```bash
 git clone https://github.com/linxuhao/ActiveMemoryIndex.git
 cd ActiveMemoryIndex
-cp .env.example .env
-# Edit .env: set OPENAI_API_KEY and AMI_AUTH_TOKEN (all other defaults match production)
-docker compose up -d
+git checkout academic-v4-20261001
+cp .env.academic.example .env.academic
+# Set OPENAI_API_KEY, AMI_EMBED_API_KEY, AMI_AUTH_TOKEN and region/workspace endpoint.
+AMI_ENV_FILE=.env.academic docker compose --env-file .env.academic -p ami-academic up -d --build
 ```
 
 | variable | purpose |
 |---|---|
-| `OPENAI_API_KEY` | Our `gpt-4o-mini` API key — participant-supplied, injected at deployment |
-| `AMI_AUTH_SCHEME` | `bearer` (also supports `token`, `x-api-key`) |
-| `AMI_AUTH_TOKEN` | The Memory System Key shared with the platform |
+| `OPENAI_API_KEY` | Participant-supplied `gpt-4o-mini` key |
+| `AMI_EMBED_API_KEY` | Separate participant-supplied embedding key |
+| `AMI_EMBED_BASE_URL` | Explicit endpoint matching embedding key region/workspace; tested with the user-confirmed Beijing workspace endpoint |
+| `AMI_EMBED_BACKEND` / `AMI_EMBED_MODEL` / `AMI_EMBED_DIMENSIONS` | `openai` / `text-embedding-v4` / `1024` |
+| `AMI_AUTH_SCHEME` / `AMI_AUTH_TOKEN` | `bearer` / Memory System Key shared privately with platform |
+| `AMI_DB_PATH` / `AMI_VOLUME` | Fresh `/data/memory-v4.sqlite3` / `ami-academic-v4-data`; never reuse BGE vectors |
+
+The release retains raw turns plus facts, extraction and recall enabled, recall weight `0.5`,
+raw-first ordering, neighbor window radius `1`, at most `100` results within `top_k`, and a
+`400000`-character response budget. Agentic, hop2, DCI, fact-evidence/selection, chunk-memory,
+event-date, fact-key/supersession, chronology/newest and cross-encoder experiments remain off.
 
 - Add: `POST https://amindex.linxuhao.app/add`
 - Search: `POST https://amindex.linxuhao.app/search`
 - Health: `GET https://amindex.linxuhao.app/health` (unauthenticated)
-- The image bakes in `bge-small-en-v1.5` weights; no model download at runtime.
-- Outbound: the container needs access to `https://api.openai.com` (or `OPENAI_BASE_URL`).
-- The endpoint is served behind Cloudflare with HTTPS and will remain stable ≥30 days after submission.
-- The container runs without a key in degraded raw-text-only mode (missing key lowers scores
-  instead of failing the run).
+- Outbound access and paid API usage are required for both the embedding provider and LLM.
+- Remote embedding failures fail startup or the request explicitly, without changing model
+  or partially storing a successful Add. LLM-only fallback is not an embedding fallback.
+- The service must remain available throughout an evaluation. Public routing and bounded
+  concurrency checks are recorded in the GitHub release notes; sustained capacity is unmeasured.
 
-## Evaluation flow
+## Validation and evaluation flow
 
-1. **Submit access request** — provide this metadata, endpoint URL, auth scheme, and Memory
-   System Key through the platform's request form.
-2. **Receive Eval Key** — issued after approval; used to initiate evaluations.
-3. **Run smoke test** — use the Eval Key on the platform's evaluation page to verify the
-   synchronous Add → Search → Answer → Evaluate flow (1/hour, private).
-4. **Submit full evaluation** — after smoke passes; 1 every 3 months, private first, public
-   after review and eligibility gate.
+The fixed release app source passed **105 checks**: 26 adapter/store unit tests, 41 baseline
+checks and 38 Add/Search contract checks through the real SDK and a loopback fake embedding
+API in a network-none container with temporary storage. The earlier candidate used identical
+embed/store/main/LLM code; its small synthetic real-provider test observed 17 v4 HTTP requests
+(all 200, 1024 dimensions) and 15 `gpt-4o-mini` requests (all 200), plus 38 contract checks and
+42/37 controls before/after restart. The 19 persisted items across four synthetic users,
+long Unicode source, vectors, request ledger and embedding identity survived restart exactly.
+Release config removes unused DCI research additions, and release DCI uses the base version.
+These are integration checks, not benchmark quality, production throughput or Full results.
+See `RELEASE.md` for scope and evidence references.
+
+1. Access application submitted on 2026-10-01 (user report); approval/Eval Key pending.
+2. Use the fixed source tag and verify the authenticated public endpoint before evaluation.
+3. Once the platform issues the Eval Key, run its official Smoke and inspect the result.
+4. Start official Full only after readiness and Smoke pass, using current platform limits
+   documented at [the competition page](https://agentmemories.ai/competition/).
+
+The platform's Answer/Eval model configuration is distinct from participant extraction and
+recall. Its exact models are unconfirmed; refer to the official
+[API configuration](https://github.com/AML-memory/agent-memory-leaderboard/blob/main/api_config.py).
 
 ---
 
@@ -96,7 +127,7 @@ experiment results at the time of this submission.
 ```
 Add  ──→  verbatim store (timestamped turns)
   │        + fact store (gpt-4o-mini extraction)
-  │        + bge-small-en-v1.5 embeddings
+  │        + text-embedding-v4 embeddings (1024 dimensions)
   │        + SQLite commit
   └──→  200 (only after persistence is searchable)
 
@@ -115,8 +146,10 @@ Search ──→  recall-question rewrite ("Did I tell you about …?")
    first-person facts** (e.g., "[2023-05-20] I adopted a beagle named Ollie from the shelter
    in Malmo."). The extraction prompt forbids inference, pronouns without referents, and
    summarisation; it requires names, numbers, and dates to survive verbatim.
-3. Both kinds are embedded with `bge-small-en-v1.5` and committed to SQLite before the
-   response is written. Re-sending a `request_id` is idempotent.
+3. Both kinds are embedded with `text-embedding-v4` (1024 dimensions) and committed to SQLite before the
+   response is written. Re-sending a `request_id` is idempotent within the user. Long source
+   text is retained whole while embedding uses lossless UTF8 segmentation and normalized
+   byte-weighted pooling; identity checks prevent vector-space mixing.
 
 Storing both is the point: extraction gives clean retrieval keys; the verbatim copy keeps the
 details extraction inevitably drops. Timestamps are carried inside `content` (not only in
@@ -171,7 +204,7 @@ The original paper (*An Index, Not a Store*) investigates **weight-level memory*
 memories directly into a model's LoRA weights and retrieving by eliciting recall from those
 weights. The strongest configuration in that paper (LoRA r=32 on a 9B backbone) is
 **deliberately excluded** from this submission because the competition requires `gpt-4o-mini`
-as the only model used during Add and Search.
+for the LLM components during Add and Search, with `text-embedding-v4` for embeddings.
 
 What was **adapted** from the paper for this submission:
 
@@ -238,7 +271,8 @@ What is **new** in this submission (not in the paper):
    short return set; on `gpt-4o-mini` accuracy rises monotonically with the returned count
    (see the read-path section above).
 6. **Production service wrapper** — FastAPI, bearer auth, Docker deployment, Cloudflare
-   tunnel, idempotent re-add, degraded mode without API key. None of this infrastructure
+   tunnel, user-scoped idempotent re-add, persistent embedding identity and vector validation.
+   LLM fallback does not replace the required remote embedding service. None of this infrastructure
    exists in the research codebase.
 7. **Contract compliance** — Synchronous persistence (200 only after SQLite commit),
    `user_id` isolation, `request_id` echo, 422 on malformed input, `/health` liveness.
@@ -253,8 +287,10 @@ What was **excluded** from the paper:
 
 ## Third-party components
 
-Used unmodified: `BAAI/bge-small-en-v1.5` (MIT), FastAPI, uvicorn, sentence-transformers,
-SQLite, OpenAI Python SDK. No benchmark data or gold answer is bundled or consulted.
+Runtime components: DashScope `text-embedding-v4` service, `gpt-4o-mini`, FastAPI, uvicorn,
+SQLite and OpenAI Python SDK. The image also includes sentence-transformers and
+`BAAI/bge-small-en-v1.5` (MIT) for optional historical research; the academic profile does not
+use BGE. No benchmark data, gold answer or manual relation annotation enters runtime retrieval.
 
 ## Integrity
 

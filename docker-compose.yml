@@ -19,7 +19,7 @@ services:
     image: ${AMI_IMAGE:-activememoryindex:latest}
     container_name: ${AMI_CONTAINER:-activememoryindex}
     env_file:
-      - path: .env
+      - path: ${AMI_ENV_FILE:-.env}
         required: false
     environment:
       # Override at the shell for local testing: AMI_AUTH_SCHEME=none docker compose up -d

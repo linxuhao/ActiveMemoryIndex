@@ -3,6 +3,14 @@
 An Add/Search memory system for the [Agent Memory Leaderboard](https://agentmemories.ai) (Agent
 Memory Challenge 2026, Academic Methods track, Textual Memory).
 
+**Academic release `academic-v4-20261001`:** `text-embedding-v4` (1024 dimensions) for
+embeddings and `gpt-4o-mini` for fact extraction and recall questions. The public tag
+identifies the fixed release commit. See [RELEASE.md](RELEASE.md) for scope and validation.
+
+The research numbers below come from historical BGE embeddings and local answer/judge
+runs. They are not official leaderboard scores and do not establish a v4 quality gain.
+The current v4 evidence establishes small-scale integration and contract behavior only.
+
 **One sentence:** memories are stored twice — as verbatim timestamped turns and as atomic
 first-person facts — and retrieval asks the log the question *the user themselves would ask*
 ("Did I tell you about …?"), because matching the log's own first-person register is worth more
@@ -13,42 +21,41 @@ at retrieval time than any amount of query rewriting in the question's register.
 ## Quick start (Docker, self-hosted)
 
 ```bash
-# Clone and deploy with docker compose (recommended):
 git clone https://github.com/linxuhao/ActiveMemoryIndex.git
 cd ActiveMemoryIndex
-cp .env.example .env
-# Edit .env: set OPENAI_API_KEY and AMI_AUTH_TOKEN (everything else has sensible defaults)
-docker compose up -d
-
-# Or standalone docker run. This path does NOT read .env — pass the file
-# explicitly, or export the variables first:
-docker build -t activememoryindex .
-docker run -d --name ami -p 127.0.0.1:8000:8000 -v ami-data:/data \
-  --env-file .env \
-  activememoryindex
+git checkout academic-v4-20261001
+cp .env.academic.example .env.academic
+# Edit .env.academic: OPENAI_API_KEY, AMI_EMBED_API_KEY, AMI_AUTH_TOKEN,
+# and AMI_EMBED_BASE_URL for the embedding key's region/workspace.
+AMI_ENV_FILE=.env.academic docker compose --env-file .env.academic -p ami-academic up -d --build
 ```
 
-Check that it actually came up — `docker compose up -d` exits 0 even when the
-container then refuses to start:
+The academic profile uses a separate container, loopback port `8012`, named volume
+`ami-academic-v4-data`, and database `/data/memory-v4.sqlite3`. Start with a new database:
+BGE vectors cannot be reused for v4. The store records backend/model/dimensions/endpoint
+and preprocessing identity and rejects incompatible or unlabelled populated remote stores.
+
+Use the same environment selection for subsequent Compose commands:
 
 ```bash
-docker compose ps
-docker compose logs --tail 20
+AMI_ENV_FILE=.env.academic docker compose --env-file .env.academic -p ami-academic ps
+AMI_ENV_FILE=.env.academic docker compose --env-file .env.academic -p ami-academic logs --tail 20
 ```
 
-The first build downloads PyTorch and the embedding weights: about 1 minute on a
-fast link, and a 2.5 GB image. Startup after that is ~4 seconds, with no network
-needed for retrieval.
+`OPENAI_API_KEY` supplies the `gpt-4o-mini` components; `AMI_EMBED_API_KEY` supplies the
+separate embedding API. The template's Singapore URL is an example: set the endpoint
+explicitly for your region and, where required, your workspace. The tested deployment
+uses the user-confirmed Beijing workspace endpoint. Credentials are never committed.
 
-Both paths bind loopback only. Publish deliberately — set `AMI_BIND=0.0.0.0`
-(compose) or change the port mapping — and only once `AMI_AUTH_TOKEN` is a real
-secret.
+The Docker image includes PyTorch and cached BGE weights for optional historical research;
+a clean build downloads dependencies and is about 2.5 GB. The v4 pipeline needs outbound
+network access to both providers at startup and during Add/Search, with paid API usage.
+Embedding failures fail startup or the request explicitly; they cannot use the LLM's
+raw-only fallback, silently change model, or commit missing vectors.
 
-The service must be reachable at a public HTTPS URL for evaluation. Health is unauthenticated;
-Add and Search require `Authorization: Bearer <AMI_AUTH_TOKEN>`.
-
-That is the whole startup. The image bakes in the embedding weights, so the container needs no
-model download at run time.
+The service binds loopback by default. Configure bearer authentication and publish through
+a HTTPS proxy/tunnel before platform evaluation. `/health` is unauthenticated; Add and
+Search require `Authorization: Bearer <AMI_AUTH_TOKEN>`.
 
 | entrypoint | method | purpose |
 |---|---|---|
@@ -56,40 +63,36 @@ model download at run time.
 | `/search` | POST | relevance-ordered memories for one question, scoped to `user_id` |
 | `/health` | GET | unauthenticated liveness check, returns 2xx |
 
-Verify a running instance against the contract:
+Verify a running instance against the contract after securely exporting its
+`AMI_AUTH_TOKEN` (and `AMI_AUTH_SCHEME=bearer`) into the shell environment:
 
 ```bash
-python3 scripts/smoke_contract.py http://127.0.0.1:8000
+python3 scripts/smoke_contract.py http://127.0.0.1:8012
 ```
 
-It reads `.env` for the auth scheme and token, so it works against an
-authenticated instance without extra flags. Run from elsewhere, or against a
-remote deployment, pass the secret in the environment:
+This script loads `.env`, not `.env.academic`; supply the academic instance's auth values
+through the environment. It writes synthetic memories and exercises the configured
+service. Against v4 it incurs embedding calls, and with the full profile it also incurs
+LLM calls. Local contract checks are separate from the official platform Smoke.
+
+**Publishing.** Route the configured candidate through a HTTPS proxy or existing tunnel.
+For a proxy on a shared Docker network, select the actual network and retain both
+academic environment selections:
 
 ```bash
-AMI_AUTH_TOKEN=<your token> python3 scripts/smoke_contract.py https://your-host
+AMI_EDGE_NETWORK=<your-proxy-network> AMI_ENV_FILE=.env.academic \
+  docker compose --env-file .env.academic -p ami-academic up -d
 ```
 
-It needs **no** OpenAI key: the full suite passes in degraded mode, which is the
-cheapest way to verify a checkout.
+Check the network exists and that the proxy targets the academic container's port `8000`.
+A network name with no proxy attached can leave the service unreachable even when healthy.
 
-**Publishing.** Both startup paths bind loopback. To expose the service, either
-set `AMI_BIND=0.0.0.0` and put HTTPS in front of it, or route it through an
-existing tunnel/proxy on a shared Docker network by naming that network:
-
-```bash
-AMI_EDGE_NETWORK=<your proxy's network> docker compose up -d
-```
-
-One variable, no `-f`. The network is selected by NAME and is deliberately not
-declared `external`, so an absent one is created rather than fatal — which also
-means a name that matches nothing gives you an empty network and a service the
-proxy cannot reach. `docker network ls` first.
-
-**Cost.** Each Add chunk costs one `gpt-4o-mini` call (up to ~1200 completion
-tokens), and each Search one more; `AMI_AGENTIC_SEARCH=1` adds a second Search
-call. Retrieval itself — embedding and ranking — is local and free, and degraded
-mode costs nothing at all.
+**Cost.** A new Add chunk uses a `gpt-4o-mini` extraction call and embeds its raw turns
+and facts with `text-embedding-v4`. Search uses a recall-question call and embeds the
+query and recall question. Embedding batching, long-text segmentation and retries affect
+API request counts and charges. Ranking over stored vectors remains local. Experimental
+agentic/DCI calls are disabled in the academic release. No cost or throughput projection
+for an official Full has been established by the small synthetic checks.
 
 **Unauthenticated surface:** `/health` (liveness only; store counts and LLM
 counters require the same secret as Search) and FastAPI's generated `/docs`,
@@ -117,9 +120,14 @@ All configuration is environment variables; **no credential is stored in this re
 | `AMI_RAW_FIRST` | `1` | order the returned set verbatim turns first, extracted facts second; changes order, never membership |
 | `AMI_RETURN_CHAR_BUDGET` | `400000` | character budget for one response; large enough never to truncate `AMI_RETURN_LIMIT` silently |
 | `AMI_AGENTIC_SEARCH` | `0` | after retrieval, gpt-4o-mini reflects on gaps and may fire a second recall question. Off by default — measured at zero end-to-end gain when the full `top_k` is returned, at the cost of one extra LLM call per search |
-| `AMI_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | embedding model, runs locally on CPU |
+| `AMI_EMBED_BACKEND` | `bge` | `openai` selects the remote academic adapter; the academic profile explicitly sets it |
+| `AMI_EMBED_MODEL` | backend-dependent | academic profile: `text-embedding-v4`; optional local research: `BAAI/bge-small-en-v1.5` |
+| `AMI_EMBED_API_KEY` | *(empty)* | separate embedding credential; `DASHSCOPE_API_KEY` is an alternative. Never inherited from the LLM key |
+| `AMI_EMBED_BASE_URL` | *(empty)* | explicit OpenAI-compatible embedding endpoint for the credential's region/workspace |
+| `AMI_EMBED_DIMENSIONS` | `1024` | vector dimensions for the remote model; fixed to 1024 in the academic profile |
+| `AMI_EMBED_TIMEOUT` / `AMI_EMBED_RETRIES` / `AMI_EMBED_CONCURRENCY` | `25` / `1` / `8` | adapter defaults; academic template sets timeout 20 s, retries 1, concurrency 4 |
 | `AMI_DB_PATH` | `/data/memory.sqlite3` | SQLite file |
-| `AMI_CACHE_MAX_ITEMS` | `1000000` | upper bound on rows in the per-user vector cache, across all users, evicted least-recently-used. The cache is a read-through of SQLite, so eviction costs a reload and never a result. A dataset carrying one `user_id` per question would otherwise grow the process until it is killed. One row is ~1.5 kB of vector plus ~0.5 kB of Python object, so the default is ~2 GB; raise it on a larger host, and note that where the host has zram this is close to free |
+| `AMI_CACHE_MAX_ITEMS` | `1000000` | upper bound on cached rows across users, evicted least-recently-used and reloaded from SQLite. A v4 float32 vector alone uses 4096 bytes per row, before text, objects and temporary arrays; size this cap for the host. Full capacity has not been established by the small integration checks |
 | `AMI_AUTH_SCHEME` | `bearer` | `none` \| `bearer` \| `token` \| `x-api-key`. Any of the three schemes carrying the right secret is accepted. The service **refuses to start** if a scheme is set and `AMI_AUTH_TOKEN` is empty or a placeholder — use `none` deliberately for local testing. |
 | `AMI_AUTH_TOKEN` | *(empty)* | expected secret when a scheme is set. This is the Memory System Key shared with the platform. |
 | `AMI_BIND` / `AMI_PORT` | `127.0.0.1` / `8000` | host interface and port (compose). Publish deliberately. |
@@ -127,14 +135,17 @@ All configuration is environment variables; **no credential is stored in this re
 | `AMI_EDGE_NETWORK` | `ami_edge_unused` | the Docker network your tunnel/proxy connector is on, read by the base compose file (there is no override file). Site-specific. Unset → compose creates the throwaway default; a name matching nothing is created empty, not refused |
 | `AMI_LLM_RETRIES` | `1` | retries per provider call |
 | `AMI_LLM_MAX_FACTS` | `24` | cap on extracted facts per Add chunk (a cap, not a target) |
-| `AMI_EMBED_DEVICE` / `AMI_EMBED_BATCH` | `cpu` / `64` | embedding device and batch size |
+| `AMI_EMBED_DEVICE` / `AMI_EMBED_BATCH` | `cpu` / backend-dependent | device applies to local BGE; batch defaults to 64 for BGE and 10 for remote v4 (academic profile: 10) |
 | `AMI_EMBED_THREADS` | `1` | intra-op threads for the embedder. One is right when the server is already serving concurrently — 16 to 64 requests each opening an OpenMP team oversubscribes the machine and the workers wait in barriers. Measured on 8 cores: Add-shaped calls 3.61/s at 8 threads against 4.53/s at 1; Search-shaped 70.4/s against 101.8/s. `0` leaves torch's heuristic alone |
 | `AMI_EXTRACT` / `AMI_RECALL_QUERY` | `1` / `1` | set either to `0` to disable that LLM channel |
 | `AMI_LLM_DISABLE_THINKING` | `0` | development only: suppress reasoning output from a local reasoning model |
 
-**Degraded mode.** With no `OPENAI_API_KEY` the service still starts and serves: it stores the raw
-timestamped turns and ranks them by the original query alone. This is a deliberate availability
-property — a missing or rate-limited key degrades retrieval quality instead of failing Add.
+**LLM fallback and research mode.** Missing or failed LLM calls can fall back to raw
+turns/original-query retrieval, but this is not a complete academic profile validation.
+Remote embedding credentials and successful embeddings remain required; embedding failures
+fail the operation. For historical local research, `.env.example` selects the default BGE
+backend with a separate database; cached BGE retrieval can operate without provider access.
+All experimental mechanisms stay off in `.env.academic.example`.
 
 ## Method
 
@@ -146,9 +157,11 @@ property — a missing or rate-limited key degrades retrieval quality instead of
    first-person facts** with the same timestamp prefix. The extraction prompt forbids inference,
    pronouns without referents, and summarisation, and requires that names, numbers and dates
    survive verbatim.
-3. Both kinds are embedded with `bge-small-en-v1.5` and committed to SQLite before the response is
+3. Both kinds are embedded with `text-embedding-v4` (1024 dimensions) and committed to SQLite before the response is
    written, so the memories are searchable the moment Add returns. Re-sending a `request_id` is
-   idempotent.
+   idempotent and scoped to the user. Long input is split losslessly into at most 2048 UTF8-byte
+   segments for embedding; normalized vectors are pooled by byte weight. The stored source
+   text stays whole. This segmentation is not a formal guarantee of provider token limits.
 
 Storing both is the point: extraction gives clean retrieval keys, the verbatim copy keeps the
 details extraction inevitably drops. Timestamps are carried inside `content` (not only in
@@ -302,11 +315,10 @@ user. Both are plain scripts with exit codes, not pytest.
 app/config.py    environment configuration
 app/main.py      FastAPI service: /add, /search, /health
 app/llm.py       the single LLM (gpt-4o-mini): fact extraction + recall-question rewriting
-app/embed.py     bge-small-en-v1.5 embeddings
-app/store.py     SQLite store with a per-user in-process vector cache
-scripts/         contract smoke test, prompt calibration
-tests/           write-path guards, write-path concurrency, returned-set ordering
-                 (plain scripts, not pytest)
+app/embed.py     text-embedding-v4 adapter; optional historical BGE backend
+app/store.py     SQLite identity/vector guards and per-user in-process cache
+scripts/         contract smoke test, embedding preflight, prompt calibration
+tests/           adapter/store unittest cases plus baseline plain-script guards
 bench/           offline LoCoMo harness used to set the retrieval knobs; not in the image
 bench/results/   committed aggregates behind every number quoted in this file
 ```
@@ -324,8 +336,9 @@ bench/results/   committed aggregates behind every number quoted in this file
 * **What is new here** is the service: the Add/Search wrapper, the extraction and recall-question
   prompts, the dual store, the fused ranking, and the return policy. This code was written for this
   submission and is not a fork of another repository.
-* **Third-party components used as-is:** `BAAI/bge-small-en-v1.5` (embeddings, MIT), FastAPI,
-  uvicorn, sentence-transformers, SQLite, and the OpenAI Python SDK. The offline harness in
+* **Third-party components:** DashScope `text-embedding-v4` and `gpt-4o-mini` APIs, FastAPI,
+  uvicorn, SQLite and OpenAI Python SDK. Sentence-transformers and
+  `BAAI/bge-small-en-v1.5` (MIT) remain available for historical research. The offline harness in
   `bench/` additionally downloads two public repositories at run time — LoCoMo
   (<https://github.com/snap-research/locomo>, `locomo10.json`) for conversations and gold
   answers, and the platform's own public evaluation code
@@ -338,8 +351,8 @@ bench/results/   committed aggregates behind every number quoted in this file
 * **Deliberately excluded:** the strongest configuration in the paper above writes each memory into
   a LoRA adapter on a local 9B model and elicits the recall statement from those weights. That
   variant is **not** submitted and **not** implemented here, because the challenge requires the
-  model used during Add and Search to be `gpt-4o-mini`. Only the compliant, frozen pipeline is in
-  this repository.
+  LLM components used during Add and Search to be `gpt-4o-mini`, with `text-embedding-v4`
+  for embeddings. Experimental mechanisms are disabled in the academic release profile.
 * **Integrity:** no hard-coded answers, no benchmark leakage, no prompt injection, no cross-`user_id`
   retrieval, no manual intervention during evaluation. Retrieval scope is `user_id` and only
   `user_id`; `session_id` is stored for provenance and never used to filter.

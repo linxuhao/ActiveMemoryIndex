@@ -6,6 +6,7 @@ HTTP response is written, so it is immediately searchable (contract requirement)
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 import threading
 from collections import OrderedDict
@@ -20,6 +21,7 @@ _lock = threading.RLock()
 _conn: sqlite3.Connection | None = None
 _cache: "OrderedDict[str, UserIndex]" = OrderedDict()
 _cached_items = 0
+_embedding_dimensions: int | None = None
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
@@ -41,6 +43,10 @@ CREATE TABLE IF NOT EXISTS requests (
     request_id TEXT NOT NULL,
     user_id    TEXT NOT NULL,
     PRIMARY KEY (request_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS embedding_metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 """
 
@@ -87,24 +93,60 @@ class UserIndex:
         self.matrix = vectors if self.matrix is None else np.vstack([self.matrix, vectors])
 
 
+def _bind_embedding_identity(connection: sqlite3.Connection) -> int | None:
+    """An unlabelled legacy store is never assumed to contain remote vectors.
+
+    Legacy local stores remain readable for old experiments. They are not stamped
+    with an inferred identity; a remote deployment must start with a new database.
+    """
+    from . import embed
+
+    identity = embed.embedding_identity()
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    remote = identity['backend'] == 'openai'
+    recorded = connection.execute(
+        "SELECT value FROM embedding_metadata WHERE key='identity'").fetchone()
+    populated = connection.execute("SELECT 1 FROM items LIMIT 1").fetchone() is not None
+    if recorded:
+        if recorded[0] != encoded:
+            raise RuntimeError("Embedding identity differs from this database; use a new AMI_DB_PATH.")
+    elif populated:
+        if remote:
+            raise RuntimeError("Unlabelled vector database cannot be used with remote embeddings; use a new AMI_DB_PATH.")
+    else:
+        connection.execute("INSERT INTO embedding_metadata(key,value) VALUES ('identity',?)", (encoded,))
+    dimensions = identity['dimensions'] if remote else None
+    if remote and connection.execute(
+            "SELECT 1 FROM items WHERE length(vec) != ? LIMIT 1", (dimensions * 4,)).fetchone():
+        raise RuntimeError("Stored vector dimensions do not match the configured embedding model.")
+    return dimensions
+
+
 def init() -> None:
-    global _conn
+    global _conn, _embedding_dimensions
     with _lock:
         if _conn is not None:
             return
         path = Path(config.DB_PATH)
         path.parent.mkdir(parents=True, exist_ok=True)
-        _conn = sqlite3.connect(str(path), check_same_thread=False)
-        _conn.execute("PRAGMA journal_mode=WAL")
-        _conn.execute("PRAGMA synchronous=NORMAL")
-        _conn.executescript(SCHEMA)
-        # Stores built before the column existed: add it, empty.
-        columns = {row[1] for row in _conn.execute("PRAGMA table_info(items)")}
-        if "event_date" not in columns:
-            _conn.execute("ALTER TABLE items ADD COLUMN event_date TEXT")
-        if "fact_key" not in columns:
-            _conn.execute("ALTER TABLE items ADD COLUMN fact_key TEXT")
-        _conn.commit()
+        connection = sqlite3.connect(str(path), check_same_thread=False)
+        try:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA synchronous=NORMAL")
+            connection.executescript(SCHEMA)
+            # Stores built before the column existed: add it, empty.
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(items)")}
+            if "event_date" not in columns:
+                connection.execute("ALTER TABLE items ADD COLUMN event_date TEXT")
+            if "fact_key" not in columns:
+                connection.execute("ALTER TABLE items ADD COLUMN fact_key TEXT")
+            dimensions = _bind_embedding_identity(connection)
+            connection.commit()
+        except Exception:
+            connection.close()
+            raise
+        _conn = connection
+        _embedding_dimensions = dimensions
 
 
 def item_id(request_id: str, kind: str, index: int, user_id: str = "") -> str:
@@ -148,6 +190,11 @@ def request_seen(request_id: str, user_id: str) -> bool:
 def add(user_id: str, session_id: str, request_id: str, items: list[Item], vectors: np.ndarray) -> int:
     """Persist items and make them searchable. Returns the number stored."""
     with _lock:
+        if _embedding_dimensions is not None and (
+                vectors.shape != (len(items), _embedding_dimensions)
+                or vectors.dtype != np.float32 or not np.isfinite(vectors).all()
+                or np.any(np.all(vectors == 0, axis=1))):
+            raise ValueError("Invalid vectors for the database embedding identity")
         index = _load(user_id)
         seq = len(index.items)
         rows = [
@@ -217,6 +264,11 @@ def _load(user_id: str) -> UserIndex:
                       fact_key=r[7])
                  for r in rows]
         matrix = np.vstack([np.frombuffer(r[5], dtype=np.float32) for r in rows])
+        if _embedding_dimensions is not None and (
+                matrix.shape != (len(items), _embedding_dimensions)
+                or not np.isfinite(matrix).all()
+                or np.any(np.all(matrix == 0, axis=1))):
+            raise ValueError("Stored vectors do not match the database embedding identity")
         index.append(items, matrix)
     global _cached_items
     _cache[user_id] = index
