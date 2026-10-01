@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .env
+.env.academic
 data/
 *.sqlite3
 *.sqlite3-*
