@@ -33,6 +33,11 @@ def _float(name: str, default: float) -> float:
 
 # --- storage -----------------------------------------------------------------
 DB_PATH = _env("AMI_DB_PATH", "/data/memory.sqlite3")
+# Diagnostic request log (JSON lines). Empty = off. When set, every /search
+# records its query, options, any undocumented fields and the returned ids;
+# every /add records message metadata (no content). It is evaluation data:
+# keep it beside the database and delete it with the database.
+REQUEST_LOG = _env("AMI_REQUEST_LOG")
 
 # --- embedding model ---------------------------------------------------------
 EMBED_BACKEND = _env("AMI_EMBED_BACKEND", "bge").lower()

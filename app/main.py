@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import datetime as dt
 import hmac
+import json
 import logging
 import re
+import threading
+import time
 
 import numpy as np
 from fastapi import FastAPI, Header, HTTPException
@@ -16,6 +19,27 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 log = logging.getLogger("ami")
 
 app = FastAPI(title="ActiveMemoryIndex", version="1.0.0")
+
+_log_lock = threading.Lock()
+# Anything in a query that could carry the question's own time: ISO/slash
+# dates, "today is", month names with a year, bare years.
+_TIME_HINT = re.compile(
+    r"\d{4}[-/]\d{1,2}[-/]\d{1,2}|\btoday\b|\bcurrent date\b|\bnow\b|"
+    r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? \d{1,2}?,? ?\d{4}\b|"
+    r"\b(?:19|20)\d{2}\b", re.I)
+
+
+def record(kind: str, **fields) -> None:
+    """Append one JSON line to AMI_REQUEST_LOG; never fails the request."""
+    if not config.REQUEST_LOG:
+        return
+    try:
+        line = json.dumps({"kind": kind, "at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                           **fields}, ensure_ascii=False, default=str)
+        with _log_lock, open(config.REQUEST_LOG, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except Exception:  # noqa: BLE001 - diagnostics must not affect serving
+        log.exception("request log write failed")
 
 
 # --- contract models ---------------------------------------------------------
@@ -481,6 +505,7 @@ def add(
 ) -> AddResponse:
     check_auth(authorization, x_api_key)
     note_extra("add", request, *request.messages)
+    started = time.monotonic()
     echo = AddResponse(
         success=True,
         request_id=request.request_id,
@@ -491,6 +516,7 @@ def add(
     # waits here and then observes the completed write, instead of racing it.
     with store.request_gate(request.request_id, request.user_id):
         if store.request_seen(request.request_id, request.user_id):
+            record("add", request_id=request.request_id, user_id=request.user_id, duplicate=True)
             return echo
 
         items, lines = build_items(request)
@@ -530,6 +556,17 @@ def add(
         if items:
             vectors = embed.encode([item.content for item in items])
             store.add(request.user_id, request.session_id, request.request_id, items, vectors)
+        stamps = [m.timestamp for m in request.messages if m.timestamp is not None]
+        record("add", request_id=request.request_id, user_id=request.user_id,
+               session_id=request.session_id, messages=len(request.messages),
+               roles=sorted({m.role for m in request.messages}),
+               timestamps=len(stamps), first_ts=min(stamps, default=None),
+               last_ts=max(stamps, default=None),
+               chars=sum(len(m.content) for m in request.messages),
+               facts=sum(1 for item in items if item.kind == "fact"),
+               extra=sorted(set(request.model_extra or ())
+                            | {k for m in request.messages for k in (m.model_extra or ())}),
+               ms=round((time.monotonic() - started) * 1000))
     return echo
 
 
@@ -541,6 +578,21 @@ def search(
 ) -> dict:
     check_auth(authorization, x_api_key)
     note_extra("search", request)
+    started = time.monotonic()
+    result = _search(request)
+    if config.REQUEST_LOG:
+        data = result["data"]
+        record("search", user_id=request.user_id, top_k=request.top_k,
+               query=request.query, options=request.options,
+               extra={k: v for k, v in (request.model_extra or {}).items()},
+               time_hints=_TIME_HINT.findall(request.query),
+               returned=len(data), chars=sum(len(d["content"]) for d in data),
+               ids=[d["id"] for d in data],
+               ms=round((time.monotonic() - started) * 1000))
+    return result
+
+
+def _search(request: SearchRequest) -> dict:
     if request.top_k <= 0:
         return {"data": []}
     index = store.get(request.user_id)
