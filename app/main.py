@@ -1,8 +1,11 @@
 """Add / Search service implementing the Agent Memory Leaderboard contract."""
 from __future__ import annotations
 
+import asyncio
+import collections
 import datetime as dt
 import hmac
+import itertools
 import json
 import logging
 import re
@@ -11,6 +14,7 @@ import time
 
 import numpy as np
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import config, dci, embed, llm, rerank, store, updates
@@ -40,6 +44,95 @@ def record(kind: str, **fields) -> None:
             handle.write(line + "\n")
     except Exception:  # noqa: BLE001 - diagnostics must not affect serving
         log.exception("request log write failed")
+
+
+# --- admission valve ---------------------------------------------------------
+valve_counters = {"add_admitted": 0, "add_rejected": 0, "search_admitted": 0, "search_rejected": 0,
+                  "upstream_429": 0, "upstream_503": 0}
+
+
+def _limit(path: str | None) -> int:
+    return {"/add": config.ADD_MAX_INFLIGHT, "/search": config.SEARCH_MAX_INFLIGHT}.get(path or "", 0)
+
+
+class AdmissionValve:
+    """Bound concurrent /add and /search work; shed the rest as 429 + Retry-After.
+
+    Pure ASGI and async, so a waiting or rejected request holds no worker
+    thread and never reaches the endpoint: a rejected Add has run no auth, no
+    LLM call, no embedding and no write. Admission is first come, first served
+    (tickets), and a request still waiting after AMI_ADMISSION_WAIT seconds is
+    rejected. Everything runs on the event loop thread, so the counters need no
+    lock. With both limits 0 this is a pass-through.
+    """
+
+    def __init__(self, app):
+        self.app = app
+        self.inflight = {"/add": 0, "/search": 0}
+        self.queues = {"/add": collections.deque(), "/search": collections.deque()}
+        self.tickets = itertools.count()
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path") if scope["type"] == "http" and scope.get("method") == "POST" else None
+        limit = _limit(path)
+        if limit <= 0:
+            await self.app(scope, receive, send)
+            return
+        queue, ticket = self.queues[path], next(self.tickets)
+        deadline = time.monotonic() + config.ADMISSION_WAIT
+        queue.append(ticket)
+        try:
+            while not (queue[0] == ticket and self.inflight[path] < limit):
+                if time.monotonic() >= deadline:
+                    valve_counters[f"{path[1:]}_rejected"] += 1
+                    await _overloaded(send, config.RETRY_AFTER)
+                    return
+                await asyncio.sleep(0.02)
+        finally:
+            queue.remove(ticket)
+        self.inflight[path] += 1
+        valve_counters[f"{path[1:]}_admitted"] += 1
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            self.inflight[path] -= 1
+
+
+async def _overloaded(send, retry_after: int) -> None:
+    body = json.dumps({"detail": {"reason": f"overloaded; retry after {retry_after} s"}}).encode()
+    await send({"type": "http.response.start", "status": 429,
+                "headers": [(b"content-type", b"application/json"),
+                            (b"retry-after", str(retry_after).encode()),
+                            (b"content-length", str(len(body)).encode())]})
+    await send({"type": "http.response.body", "body": body})
+
+
+app.add_middleware(AdmissionValve)
+
+
+@app.exception_handler(llm.UpstreamUnavailable)
+async def upstream_unavailable(_request, exc: llm.UpstreamUnavailable) -> JSONResponse:
+    """429/503 + Retry-After for a transient provider failure.
+
+    Raised only before persistence: on Add by the extraction call (with
+    AMI_EXTRACT_REQUIRED) or the embedding call, both of which precede
+    store.add; on Search, where nothing is written. The platform retries both
+    statuses, so the retry of an Add is a clean first write.
+    """
+    valve_counters[f"upstream_{exc.status}"] += 1
+    return JSONResponse({"detail": {"reason": exc.reason}}, status_code=exc.status,
+                        headers={"Retry-After": str(exc.retry_after)})
+
+
+def encode_or_unavailable(texts: list[str], **kwargs) -> np.ndarray:
+    """embed.encode, with a transient provider failure surfaced as UpstreamUnavailable."""
+    try:
+        return embed.encode(texts, **kwargs)
+    except Exception as exc:
+        mapped = llm.transient(exc)
+        if mapped is None:
+            raise
+        raise mapped from exc
 
 
 # --- contract models ---------------------------------------------------------
@@ -245,7 +338,7 @@ def rank(index: store.UserIndex, query: str, options: list[str] | None,
     if recall_question is None:
         recall_question = llm.recall_question(query, options) if config.llm_available() else None
     texts = [query] + ([recall_question] if recall_question else [])
-    vectors = embed.encode(texts, is_query=True)
+    vectors = encode_or_unavailable(texts, is_query=True)
     scores = index.matrix @ vectors[0]
     if recall_question:
         weight = config.RECALL_WEIGHT
@@ -488,6 +581,7 @@ def health(
         return {"status": "ok"}
     counters = dict(llm.counters)
     counters.update({f"dci_{key}": value for key, value in dci.counters.items()})
+    counters.update({f"valve_{key}": value for key, value in valve_counters.items()})
     calls, failures = counters["calls"], counters["failures"]
     # "llm: true" only says a key is configured. A key that 401s on every call
     # reported healthy right through a quota outage, so say so out loud.
@@ -577,7 +671,7 @@ def add(
             # One dedicated call per chunk, asking only for dates.
             date_items(items)
         if items:
-            vectors = embed.encode([item.content for item in items])
+            vectors = encode_or_unavailable([item.content for item in items])
             store.add(request.user_id, request.session_id, request.request_id, items, vectors,
                       updates=records)
         stamps = [m.timestamp for m in request.messages if m.timestamp is not None]

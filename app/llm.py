@@ -82,7 +82,47 @@ def _get_client():
     return _client
 
 
-def _complete(system: str, user: str, max_tokens: int) -> str | None:
+class UpstreamUnavailable(Exception):
+    """A provider call failed transiently after the SDK's retries.
+
+    status is the HTTP status this service should answer with (429 for a
+    provider rate limit, 503 otherwise); retry_after is in whole seconds.
+    """
+
+    def __init__(self, status: int, retry_after: int, reason: str):
+        super().__init__(reason)
+        self.status, self.retry_after, self.reason = status, retry_after, reason
+
+
+def transient(exc: Exception) -> UpstreamUnavailable | None:
+    """Classify an OpenAI-SDK exception (LLM or embedding client) as transient.
+
+    Rate limits map to 429 carrying the provider's own retry-after when it
+    sends one (capped at the platform's 60 s); timeouts, connection failures
+    and 5xx map to 503. Anything else (bad request, auth, invalid data) is not
+    transient and returns None.
+    """
+    try:
+        import openai
+    except ImportError:  # pragma: no cover - the service always has the SDK
+        return None
+    if isinstance(exc, openai.RateLimitError):
+        wait = config.RETRY_AFTER
+        try:
+            wait = int(float(exc.response.headers.get("retry-after", wait)))
+        except (AttributeError, TypeError, ValueError):
+            pass
+        return UpstreamUnavailable(429, max(1, min(60, wait)), "upstream rate limit")
+    if isinstance(exc, (openai.APITimeoutError, openai.APIConnectionError)):
+        return UpstreamUnavailable(503, config.RETRY_AFTER, "upstream unavailable")
+    if isinstance(exc, openai.APIStatusError) and exc.status_code >= 500:
+        return UpstreamUnavailable(503, config.RETRY_AFTER, "upstream unavailable")
+    return None
+
+
+def _complete(system: str, user: str, max_tokens: int, strict: bool = False) -> str | None:
+    """One chat completion; None on any failure, unless *strict* and the
+    failure is transient, in which case UpstreamUnavailable is raised."""
     if not config.llm_available():
         return None
     # Gateway secret code: <<DISABLE_THINKING>> in the system message tells the
@@ -103,6 +143,9 @@ def _complete(system: str, user: str, max_tokens: int) -> str | None:
     except Exception as exc:  # network, quota, provider error — degrade, never fail Add
         counters["failures"] += 1
         log.warning("llm call failed: %s", exc)
+        unavailable = transient(exc) if strict else None
+        if unavailable is not None:
+            raise unavailable from exc
         return None
 
 
@@ -233,7 +276,8 @@ def extract_facts(chunk_text: str) -> list[str]:
     """Add path: atomic, self-contained, timestamped memories."""
     if not config.EXTRACT_ENABLED:
         return []
-    raw = _complete(EXTRACT_SYSTEM % config.LLM_MAX_FACTS, chunk_text, config.LLM_MAX_TOKENS_EXTRACT)
+    prompt = (EXTRACT_SYSTEM % config.LLM_MAX_FACTS, chunk_text, config.LLM_MAX_TOKENS_EXTRACT)
+    raw = _complete(*prompt, strict=True) if config.EXTRACT_REQUIRED else _complete(*prompt)
     if raw is None:
         return []
     facts = _parse_facts(raw)[: config.LLM_MAX_FACTS]

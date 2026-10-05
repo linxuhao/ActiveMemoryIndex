@@ -353,6 +353,33 @@ RERANK_BATCH = _int("AMI_RERANK_BATCH", 32)
 # vectors themselves barely compress; the text does.
 CACHE_MAX_ITEMS = _int("AMI_CACHE_MAX_ITEMS", 1_000_000)
 
+# --- admission (overload valve) -------------------------------------------------
+# The platform drives Add at 16-64 concurrent requests and Search at 16-256
+# (track contract options max_add_concurrency / search_concurrency), while our
+# upstream gates admit far fewer (AMI_LLM_CONCURRENCY, AMI_EMBED_CONCURRENCY).
+# Without a valve the excess queues inside the process, latency grows with the
+# queue, and past the edge's ~100 s cut the caller sees a 524 for an Add that is
+# still running. The API Guide sanctions 429 + Retry-After instead: Add retries
+# 429 up to 32 attempts and honours Retry-After up to 60 s.
+#
+# With a limit set, at most that many requests of the endpoint run at once; a
+# request that cannot get a slot within AMI_ADMISSION_WAIT seconds is answered
+# 429 with Retry-After: AMI_RETRY_AFTER before any of its work starts, so a
+# rejected Add persisted nothing and its retry is an ordinary first attempt.
+# 0 = off (the request waits for a worker thread, as before).
+ADD_MAX_INFLIGHT = _int("AMI_ADD_MAX_INFLIGHT", 0)
+SEARCH_MAX_INFLIGHT = _int("AMI_SEARCH_MAX_INFLIGHT", 0)
+ADMISSION_WAIT = _float("AMI_ADMISSION_WAIT", 30.0)
+RETRY_AFTER = _int("AMI_RETRY_AFTER", 10)
+# Extraction is normally best-effort: a failed gpt-4o-mini call stores the
+# verbatim turns without facts and Add still returns 200, permanently. With
+# this set, an extraction call that failed upstream (rate limit, timeout,
+# connection, 5xx after the SDK's own retries) fails the Add with 429/503 +
+# Retry-After before anything is persisted, so the platform's retry re-runs
+# the extraction. The trade: a long provider outage then exhausts the
+# platform's 32 attempts instead of degrading. Off by default.
+EXTRACT_REQUIRED = _env("AMI_EXTRACT_REQUIRED", "0") != "0"
+
 # --- auth (the platform smoke path uses none) --------------------------------
 # Fail closed. A memory service reachable from the internet with auth off by
 # default is the worst available default, and a launch path that forgets to set
