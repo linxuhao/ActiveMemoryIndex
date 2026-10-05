@@ -258,6 +258,39 @@ NEWEST_FIRST = _env("AMI_NEWEST_FIRST", "0") != "0"
 FACT_KEYS = _env("AMI_FACT_KEYS", "0") != "0"
 SUPERSEDE_MARK = _env("AMI_SUPERSEDE_MARK", "0") != "0"
 SUPERSEDE_TAU = float(_env("AMI_SUPERSEDE_TAU", "0.90"))
+# Explicit updates. All three off by default; see
+# bench/results/explicit_update_preregistration.md.
+# DETECT (Add): one extra gpt-4o-mini call per chunk, run beside extraction,
+# finds statements in which the USER explicitly replaces or corrects a value
+# ("UPDATE: replace the prior value ...", "correction: ...", "changed X from
+# A to B") and stores (subject, attribute, new value, old value if stated,
+# relative?) as a record. The extraction prompt is unchanged.
+UPDATE_DETECT = _env("AMI_UPDATE_DETECT", "0") != "0"
+# RENDER (Add, needs DETECT): also store each absolute update's current-state
+# sentence ("Frank Herbert's genre is funk.") as a fact.
+UPDATE_RENDER = _env("AMI_UPDATE_RENDER", "0") != "0"
+# WITHHOLD (Search): leave out of the returned set the EARLIER items that state
+# the value an absolute update replaced. Membership only; nothing is rewritten.
+# Never for relative updates, never for history- or date-scoped questions.
+UPDATE_WITHHOLD = _env("AMI_UPDATE_WITHHOLD", "0") != "0"
+# Earlier items handed to the verification call per update (nearest first).
+UPDATE_CANDIDATES = _int("AMI_UPDATE_CANDIDATES", 20)
+LLM_MAX_TOKENS_UPDATES = _int("AMI_LLM_MAX_TOKENS_UPDATES", 600)
+LLM_MAX_TOKENS_VERIFY = _int("AMI_LLM_MAX_TOKENS_VERIFY", 400)
+# 2 (default): two-stage detector (intent labels with verbatim quotes, then
+# extraction only for accepted replacements/corrections), user-only candidates
+# for the user's own attributes, REPLACED/SAME/OTHER verifier.
+# 1: the round-1 single-call detector and verifier, for reproduction.
+# bench/results/explicit_update_r2_preregistration.md
+# 3 (default): version 2 plus a same-language check before RENDER stores a
+# sentence, facts of a confirmed-replaced turn's chunk re-verified, and a
+# verifier that judges each memory against the update only
+# (bench/results/explicit_update_r3_preregistration.md).
+# 4 (default): version 3 plus the same-Add exclusion: nothing from the update's
+# own Add request (raw turn or fact) is ever withheld
+# (bench/results/explicit_update_r4_preregistration.md).
+UPDATE_VERSION = _int("AMI_UPDATE_VERSION", 4)
+LLM_MAX_TOKENS_INTENT = _int("AMI_LLM_MAX_TOKENS_INTENT", 500)
 
 # --- direct corpus interaction ------------------------------------------------
 # Replace the embedding selection with a gpt-4o-mini agent that greps and reads

@@ -13,7 +13,7 @@ import numpy as np
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import config, dci, embed, llm, rerank, store
+from . import config, dci, embed, llm, rerank, store, updates
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("ami")
@@ -378,7 +378,8 @@ def order(chosen: list[tuple[store.Item, float]]) -> None:
 
 def select(index: store.UserIndex, scores: np.ndarray, top_k: int,
            limit_override: int | None = None, exclude: set[str] | None = None,
-           budget_override: int | None = None) -> list[tuple[store.Item, float]]:
+           budget_override: int | None = None,
+           withheld: set[str] | None = None) -> list[tuple[store.Item, float]]:
     limit = min(top_k, config.RETURN_LIMIT) if limit_override is None else limit_override
     chosen: list[tuple[store.Item, float]] = []
     seen: set[str] = set(exclude or ())
@@ -389,6 +390,8 @@ def select(index: store.UserIndex, scores: np.ndarray, top_k: int,
     def take(item: store.Item, score: float) -> bool:
         """Append one memory if it is new and affordable. True when full."""
         nonlocal budget
+        if withheld and item.id in withheld:
+            return False
         key = content_key(item)
         if key in seen:
             return False
@@ -520,6 +523,9 @@ def add(
             return echo
 
         items, lines = build_items(request)
+        detection = (updates.start_detection(items)
+                     if lines and config.UPDATE_DETECT and config.llm_available() else None)
+        records: list[dict] = []
         if lines:
             prefix = chunk_prefix(request)
             if config.EVENT_DATES_AT_ADD:
@@ -550,12 +556,30 @@ def add(
                         fact_key=keys[position] if config.FACT_KEYS else None,
                     )
                 )
+        if detection is not None:
+            records = detection.result()
+            if config.UPDATE_RENDER:
+                # The update's current value as a plain statement, beside the
+                # extracted facts; numbered after them so ids never collide.
+                position = sum(1 for item in items if item.kind == "fact")
+                turns = {item.id: item.content for item in items if item.kind == "raw"}
+                for found in records:
+                    if not updates.renderable(found, turns.get(found["item_id"], "")):
+                        continue
+                    statement = found["statement"]
+                    items.append(store.Item(
+                        id=store.item_id(request.request_id, "fact", position, request.user_id),
+                        kind="fact", parent_id=None,
+                        content=statement if statement.startswith("[") else f"{prefix}{statement}",
+                        created_at=items[0].created_at if items else None))
+                    position += 1
         if items and config.EVENT_DATES_ADD_CALL:
             # One dedicated call per chunk, asking only for dates.
             date_items(items)
         if items:
             vectors = embed.encode([item.content for item in items])
-            store.add(request.user_id, request.session_id, request.request_id, items, vectors)
+            store.add(request.user_id, request.session_id, request.request_id, items, vectors,
+                      updates=records)
         stamps = [m.timestamp for m in request.messages if m.timestamp is not None]
         record("add", request_id=request.request_id, user_id=request.user_id,
                session_id=request.session_id, messages=len(request.messages),
@@ -599,6 +623,11 @@ def _search(request: SearchRequest) -> dict:
     if index.matrix is None or not index.items:
         return {"data": []}
 
+    # Earlier items stating a value the user explicitly replaced. Empty unless
+    # AMI_UPDATE_WITHHOLD is on and this user has update records.
+    withheld = (updates.withheld(index, request.user_id, request.query)
+                if config.UPDATE_WITHHOLD else set())
+
     # Round 1: standard fused retrieval. With slots reserved for a second round
     # it takes fewer, so the second round is not competing for the same places.
     reserved = 0
@@ -608,7 +637,8 @@ def _search(request: SearchRequest) -> dict:
     if config.RERANK_MODEL:
         scores1 = rerank.rescore(index, request.query, scores1)
     chosen1 = select(index, scores1, request.top_k,
-                     limit_override=min(request.top_k, config.RETURN_LIMIT) - reserved if reserved else None)
+                     limit_override=min(request.top_k, config.RETURN_LIMIT) - reserved if reserved else None,
+                     withheld=withheld)
 
     if reserved:
         reflection = llm.reflect_gap(request.query, request.options,
@@ -625,7 +655,8 @@ def _search(request: SearchRequest) -> dict:
             chosen1 += select(index, scores2, request.top_k,
                               limit_override=reserved,
                               exclude={content_key(item) for item, _ in chosen1},
-                              budget_override=config.RETURN_CHAR_BUDGET - spent)
+                              budget_override=config.RETURN_CHAR_BUDGET - spent,
+                              withheld=withheld)
             order(chosen1)
 
     # Agentic round: reflect → maybe a second retrieval
@@ -648,7 +679,7 @@ def _search(request: SearchRequest) -> dict:
                 # Element-wise max, not mean: the second question exists to
                 # reach evidence the first one missed, and averaging would
                 # dilute exactly those items back below the cut.
-                chosen1 = select(index, np.maximum(scores1, scores2), request.top_k)
+                chosen1 = select(index, np.maximum(scores1, scores2), request.top_k, withheld=withheld)
 
     # Direct corpus interaction: an agent greps and reads the store and names
     # the ids to return. It replaces the selection above (arm `dci`) or leads
@@ -659,13 +690,15 @@ def _search(request: SearchRequest) -> dict:
         if picked is None:
             dci.counters["fallbacks"] += 1
         else:
-            agent = [(item, 1.0 - position / 1000.0) for position, item in enumerate(picked)]
+            agent = [(item, 1.0 - position / 1000.0) for position, item in enumerate(picked)
+                     if item.id not in withheld]
             if config.DCI_FILL and len(agent) < limit:
                 spent = sum(len(item.content) for item, _ in agent)
                 fill = select(index, scores1, request.top_k,
                               limit_override=limit - len(agent),
                               exclude={content_key(item) for item, _ in agent},
-                              budget_override=config.RETURN_CHAR_BUDGET - spent)
+                              budget_override=config.RETURN_CHAR_BUDGET - spent,
+                              withheld=withheld)
                 order(fill)
                 chosen1 = agent + fill
             else:

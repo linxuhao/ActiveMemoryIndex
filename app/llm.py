@@ -425,3 +425,217 @@ def reflect_gap(query: str, options: list[str] | None, top_memories: list[str]) 
     except json.JSONDecodeError:
         pass
     return None
+
+
+# --- explicit updates (AMI_UPDATE_DETECT / AMI_UPDATE_WITHHOLD) ---------------
+# A separate call, not a change to EXTRACT_SYSTEM: the extraction prompt stays
+# byte-identical, so the facts channel of a store built with detection on is
+# the shipped one (bench/results/explicit_update_preregistration.md).
+UPDATE_DETECT_SYSTEM = """You find EXPLICIT updates in a chunk of a conversation, for a personal memory index.
+
+The turns are numbered `N | [date time] Speaker: text` (the date may be missing). "I" is the user, the owner of the memories; any other speaker is not.
+
+An explicit update is something the USER says that replaces or corrects a value stated before, and that says so in words:
+- an instruction to replace, update, overwrite or correct a stored value or fact;
+- a correction: "correction: ...", "actually it's X, not Y", "I was wrong, it is X";
+- a stated change: "I changed my gym time from 7 to 6", "my address is now X instead of Y", "X is no longer Y".
+
+Not an explicit update: new information that does not say an earlier value is replaced; plans, wishes, hypotheticals and questions; anything a speaker other than "I" says.
+
+For each explicit update give:
+- "turn": the N of the turn that states it;
+- "subject": whose or what property it is, exactly as written; "me" when it is the user's own;
+- "attribute": a short noun phrase naming the property, e.g. "gym time", "country of citizenship", "home address";
+- "new_value": the new value, copied exactly as written in the turn;
+- "old_value": the replaced value copied exactly as written in the turn, or null when the turn does not state it. Never guess it;
+- "relative": true when the new value is given relative to the old one ("one more", "two fewer", "added another", "+2", "increased by 10") instead of outright, else false;
+- "statement": one standalone present-tense sentence stating the current value, e.g. "Frank Herbert's genre is funk." or "My gym time is 6 pm." Do not mention the old value.
+
+Return JSON only: {"updates": [{"turn": 0, "subject": "...", "attribute": "...", "new_value": "...", "old_value": null, "relative": false, "statement": "..."}]}. Most chunks contain none: then return {"updates": []}."""
+
+UPDATE_VERIFY_SYSTEM = """You check which earlier memories state a value that a later explicit update replaced.
+
+You get the update (its own words, the subject, the attribute, the new value and, when known, the old value) and numbered memories `N | text` written before it.
+
+A memory states the replaced value only when ALL of these hold:
+1. It is about the same subject (for subject "me": the user themself).
+2. It gives the value of the very same attribute, not a related one: a gym day is not a gym time, a birthplace is not a citizenship, a team's size is not its name.
+3. That value differs from the new value; when the old value is known, it is that old value.
+4. It asserts the value as true. A memory that describes the change itself, mentions the new value, asks a question, or states a plan or a wish does not count.
+
+For each memory that qualifies, quote the replaced value exactly as it is written in that memory.
+
+Return JSON only: {"replaced": [{"n": 0, "old_value": "exact quote"}]}; {"replaced": []} when none qualifies."""
+
+
+def _json_object(raw: str | None) -> dict | None:
+    if not raw:
+        return None
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not match:
+        return None
+    try:
+        payload = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def detect_updates(numbered: str) -> list[dict] | None:
+    """Explicit updates stated in one chunk, unvalidated. None on failure."""
+    if not config.llm_available():
+        return None
+    payload = _json_object(_complete(UPDATE_DETECT_SYSTEM, numbered, config.LLM_MAX_TOKENS_UPDATES))
+    if payload is None:
+        return None
+    updates = payload.get("updates")
+    return [entry for entry in updates if isinstance(entry, dict)] if isinstance(updates, list) else []
+
+
+def verify_replaced(update: str, memories: list[str]) -> list[tuple[int, str]] | None:
+    """[(memory number, quoted old value)] the reader says the update replaced.
+    None on failure, which the caller treats as "nothing replaced" and retries
+    on a later search."""
+    if not config.llm_available() or not memories:
+        return None
+    numbered = "\n".join(f"{n} | {text}" for n, text in enumerate(memories))
+    payload = _json_object(_complete(UPDATE_VERIFY_SYSTEM, f"{update}\n\nMemories:\n{numbered}",
+                                     config.LLM_MAX_TOKENS_VERIFY))
+    if payload is None:
+        return None
+    out = []
+    for entry in payload.get("replaced") or []:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            number = int(entry.get("n"))
+        except (TypeError, ValueError):
+            continue
+        quote = entry.get("old_value")
+        if isinstance(quote, str) and quote.strip() and 0 <= number < len(memories):
+            out.append((number, quote.strip()))
+    return out
+
+
+# --- explicit updates, round 2 (AMI_UPDATE_VERSION=2) --------------------------
+# Two stages, each with one job: stage 1 labels the intent of the user's
+# value-bearing statements and quotes them; stage 2 runs only when stage 1
+# accepted a replacement or correction, and extracts the update from the quote.
+UPDATE_INTENT_SYSTEM = """You read a chunk of a conversation and label what the user is doing when they state a value that may already be on record.
+
+The turns are numbered `N | [date time] Speaker: text`; the date may be missing. "I" is the user, the owner of the memories; any other speaker is not. Statements can be in any language.
+
+List at most 8 of the user's statements that state a value someone could store and later need to update: a name, number, date, time, place, status, choice, or a fact about a person or thing. Give each exactly one label:
+- EXPLICIT_REPLACEMENT: the user says in words that an earlier value is replaced, overwritten or changed, and gives the new one. "Please change my delivery address to 5 Elm Road." "Update my gym time: it's 6 pm from now on." "把会议时间改成下午三点。" "Mi número ya no es el anterior; ahora es 555-0199."
+- CORRECTION: the user says an earlier value was wrong and gives the right one. "Sorry, I misspoke — the dog's name is Biscuit, not Bandit." "不对，我的生日是五月二号。" "Correction: the meeting is in room 4."
+- RESTATEMENT: the user says again something that may have been said before, in the same or other words, without changing it.
+- NEW_INFO: information with no words saying an earlier value is replaced or wrong, even if it differs from something said earlier. "I now lead a team of five." "I have 1,300 followers."
+- RELATIVE_CHANGE: a change given relative to the old value. "I added one more coin." "我的预算又增加了两百元。"
+- PLAN: an intention, wish, consideration or choice among options. "I think I'll go with the blue one." "I might move to Denver."
+- HISTORY: narration of the past. "I used to wake up at 8:30." "以前我住在上海。"
+
+For each statement give the turn number and copy, character for character, the shortest span of that turn that shows its intent ("quote"). The quote must appear in the turn exactly as you write it: no "..." or other added marks, no words left out or changed, spelling mistakes kept. Never translate or paraphrase it.
+
+Return JSON only: {"statements": [{"turn": 0, "label": "NEW_INFO", "quote": "..."}]}. Return {"statements": []} when the user states no such value."""
+
+UPDATE_EXTRACT_SYSTEM = """You extract the value change stated by a user's statement, for a personal memory index.
+
+You get a chunk of a conversation (turns numbered `N | [date time] Speaker: text`, "I" is the user) and one or more numbered statements the user made in it, each quoted from a turn. Statements can be in any language.
+
+For each statement give:
+- "statement": its number;
+- "subject": whose or what property changes, exactly as written; "me" when it is the user's own;
+- "attribute": a short noun phrase naming the property;
+- "new_value": the new value, copied exactly as written in the turn;
+- "old_value": the replaced value copied exactly as written in the turn, or null when the turn does not state it. Never guess it;
+- "relative": true when the new value is given relative to the old one instead of outright, else false;
+- "current": one standalone present-tense sentence stating the current value, without the old value, written in the same language as the quoted statement: an English statement gets an English sentence, a Chinese statement a Chinese one. Never translate.
+
+Return JSON only: {"updates": [{"statement": 0, "subject": "...", "attribute": "...", "new_value": "...", "old_value": null, "relative": false, "current": "..."}]}. Leave out a statement that changes no value."""
+
+UPDATE_VERIFY2_SYSTEM = """You check which earlier memories state a value that a later explicit update replaced.
+
+You get the update (its own words, the subject, the attribute, the new value and, when known, the old value) and numbered memories `N | text` written before it. Memories can be in any language.
+
+Give each memory one verdict:
+- REPLACED: it asserts, as true, a value of the very same attribute of the same subject (for subject "me": the user themself), and that value differs from the new value; when the old value is known, it is that old value. A gym day is not a gym time; a birthplace is not a citizenship.
+- SAME: it states the same value as the new value in any wording, or it describes the change itself.
+- OTHER: anything else: another subject or attribute, a question, a plan, a wish, a passing mention.
+
+For REPLACED, quote the replaced value exactly as it is written in that memory.
+
+Return JSON only: {"verdicts": [{"n": 0, "verdict": "REPLACED", "old_value": "exact quote"}]}, listing only memories that are REPLACED or SAME; {"verdicts": []} when none is."""
+
+UPDATE_VERIFY3_SYSTEM = """You check which earlier memories state a value that a later explicit update replaced.
+
+You get the update (its own words, the subject, the attribute, the new value and, when known, the old value) and numbered memories `N | text` written before it. Memories can be in any language. Judge each memory on its own, only against the update.
+
+For each memory that gives a value for the very same attribute of the same subject (for subject "me": the user themself), report:
+- "value": that value, quoted exactly as written in the memory;
+- "compared_to_new": how that value relates to the new value:
+  - "DIFFERENT": a different value, the one the update replaced (when the old value is known, it is that old value). Several memories can state it in different words or formats; each of them is DIFFERENT.
+  - "SAME": the same value as the new value, in any wording ("did not pass away" against "did not end up dying").
+  - "LESS_DETAIL": the new value with less detail ("February" against "February 10th"; "a hotel in Downtown LA" against "the Hilton in Downtown LA").
+  - "MORE_DETAIL": the new value with more detail.
+  - "PART": it describes the change itself, or repeats part of what the update says.
+Leave out memories about another subject or another attribute (a gym day is not a gym time; a birthplace is not a citizenship), questions, plans, wishes and passing mentions.
+
+Return JSON only: {"memories": [{"n": 0, "value": "exact quote", "compared_to_new": "DIFFERENT"}]}; {"memories": []} when none qualifies."""
+
+
+def classify_update_intent(numbered: str) -> list[dict] | None:
+    """Stage 1: [{"turn", "label", "quote"}], unvalidated. None on failure."""
+    if not config.llm_available():
+        return None
+    payload = _json_object(_complete(UPDATE_INTENT_SYSTEM, numbered, config.LLM_MAX_TOKENS_INTENT))
+    if payload is None:
+        return None
+    statements = payload.get("statements")
+    return [s for s in statements if isinstance(s, dict)] if isinstance(statements, list) else []
+
+
+def extract_updates(numbered: str, statements: list[tuple[int, str]]) -> list[dict] | None:
+    """Stage 2 over accepted (turn, quote) statements. None on failure."""
+    if not config.llm_available() or not statements:
+        return None
+    listed = "\n".join(f"S{k} | turn {turn} | {quote}" for k, (turn, quote) in enumerate(statements))
+    payload = _json_object(_complete(UPDATE_EXTRACT_SYSTEM, f"Chunk:\n{numbered}\n\nStatements:\n{listed}",
+                                     config.LLM_MAX_TOKENS_UPDATES))
+    if payload is None:
+        return None
+    updates = payload.get("updates")
+    return [u for u in updates if isinstance(u, dict)] if isinstance(updates, list) else []
+
+
+def verify_replaced_v2(update: str, memories: list[str]) -> list[tuple[int, str]] | None:
+    """[(memory number, quoted old value)] judged REPLACED; SAME and OTHER are
+    dropped. None on failure."""
+    if not config.llm_available() or not memories:
+        return None
+    numbered = "\n".join(f"{n} | {text}" for n, text in enumerate(memories))
+    if config.UPDATE_VERSION >= 3:
+        # Round 3: the model quotes the value, then says how it relates to
+        # the new value; only DIFFERENT is a replaced value.
+        payload = _json_object(_complete(UPDATE_VERIFY3_SYSTEM, f"{update}\n\nMemories:\n{numbered}",
+                                         config.LLM_MAX_TOKENS_VERIFY))
+        if payload is None:
+            return None
+        entries = [{"n": e.get("n"), "old_value": e.get("value")} for e in payload.get("memories") or []
+                   if isinstance(e, dict) and str(e.get("compared_to_new", "")).upper() == "DIFFERENT"]
+    else:
+        payload = _json_object(_complete(UPDATE_VERIFY2_SYSTEM, f"{update}\n\nMemories:\n{numbered}",
+                                         config.LLM_MAX_TOKENS_VERIFY))
+        if payload is None:
+            return None
+        entries = [e for e in payload.get("verdicts") or []
+                   if isinstance(e, dict) and str(e.get("verdict", "")).upper() == "REPLACED"]
+    out = []
+    for entry in entries:
+        try:
+            number = int(entry.get("n"))
+        except (TypeError, ValueError):
+            continue
+        quote = entry.get("old_value")
+        if isinstance(quote, str) and quote.strip() and 0 <= number < len(memories):
+            out.append((number, quote.strip()))
+    return out

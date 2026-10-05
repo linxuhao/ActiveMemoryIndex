@@ -49,6 +49,35 @@ CREATE TABLE IF NOT EXISTS embedding_metadata (
     value TEXT NOT NULL
 );
 """
+# Created only when an update switch is on, so a store served with every
+# switch off keeps exactly the shipped schema.
+UPDATE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS updates (
+    id         TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL,
+    request_id TEXT,
+    item_id    TEXT NOT NULL,
+    subject    TEXT NOT NULL,
+    attribute  TEXT NOT NULL,
+    new_value  TEXT NOT NULL,
+    old_value  TEXT,
+    relative   INTEGER NOT NULL,
+    statement  TEXT,
+    created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_updates_user ON updates(user_id);
+CREATE TABLE IF NOT EXISTS update_checks (
+    user_id   TEXT NOT NULL,
+    update_id TEXT NOT NULL,
+    item_id   TEXT NOT NULL,
+    replaced  INTEGER NOT NULL,
+    quote     TEXT,
+    PRIMARY KEY (update_id, item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_update_checks_user ON update_checks(user_id);
+"""
+UPDATE_FIELDS = ("id", "item_id", "subject", "attribute", "new_value", "old_value",
+                 "relative", "statement", "created_at")
 
 
 @dataclass
@@ -140,6 +169,8 @@ def init() -> None:
                 connection.execute("ALTER TABLE items ADD COLUMN event_date TEXT")
             if "fact_key" not in columns:
                 connection.execute("ALTER TABLE items ADD COLUMN fact_key TEXT")
+            if config.UPDATE_DETECT or config.UPDATE_WITHHOLD:
+                connection.executescript(UPDATE_SCHEMA)
             dimensions = _bind_embedding_identity(connection)
             connection.commit()
         except Exception:
@@ -187,8 +218,10 @@ def request_seen(request_id: str, user_id: str) -> bool:
         return row is not None
 
 
-def add(user_id: str, session_id: str, request_id: str, items: list[Item], vectors: np.ndarray) -> int:
-    """Persist items and make them searchable. Returns the number stored."""
+def add(user_id: str, session_id: str, request_id: str, items: list[Item], vectors: np.ndarray,
+        updates: list[dict] | None = None) -> int:
+    """Persist items (and the chunk's explicit-update records, in the same
+    commit) and make them searchable. Returns the number of items stored."""
     with _lock:
         if _embedding_dimensions is not None and (
                 vectors.shape != (len(items), _embedding_dimensions)
@@ -220,6 +253,8 @@ def add(user_id: str, session_id: str, request_id: str, items: list[Item], vecto
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
+        if updates:
+            _insert_updates(user_id, request_id, updates)
         _conn.execute(
             "INSERT OR REPLACE INTO requests (request_id, user_id) VALUES (?, ?)", (request_id, user_id)
         )
@@ -282,3 +317,49 @@ def stats() -> dict:
         users = _conn.execute("SELECT COUNT(DISTINCT user_id) FROM items").fetchone()[0]
         items = _conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
     return {"users": users, "items": items}
+
+
+# --- explicit-update records (AMI_UPDATE_*) -----------------------------------
+def _insert_updates(user_id: str, request_id: str | None, updates: list[dict]) -> None:
+    _conn.executemany(
+        "INSERT OR REPLACE INTO updates (id, user_id, request_id, item_id, subject, attribute, "
+        "new_value, old_value, relative, statement, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [(u["id"], user_id, request_id, u["item_id"], u["subject"], u["attribute"], u["new_value"],
+          u.get("old_value"), int(bool(u.get("relative"))), u.get("statement"), u.get("created_at"))
+         for u in updates],
+    )
+
+
+def add_updates(user_id: str, request_id: str | None, updates: list[dict]) -> None:
+    """Records for items already stored (the offline detection pass)."""
+    with _lock:
+        _insert_updates(user_id, request_id, updates)
+        _conn.commit()
+
+
+def get_updates(user_id: str) -> list[dict]:
+    with _lock:
+        rows = _conn.execute(
+            f"SELECT {', '.join(UPDATE_FIELDS)} FROM updates WHERE user_id = ? ORDER BY rowid",
+            (user_id,)).fetchall()
+    return [dict(zip(UPDATE_FIELDS, row)) for row in rows]
+
+
+def get_checks(user_id: str) -> dict[tuple[str, str], tuple[bool, str | None]]:
+    with _lock:
+        rows = _conn.execute(
+            "SELECT update_id, item_id, replaced, quote FROM update_checks WHERE user_id = ?",
+            (user_id,)).fetchall()
+    return {(r[0], r[1]): (bool(r[2]), r[3]) for r in rows}
+
+
+def add_checks(user_id: str, checks: list[tuple[str, str, bool, str | None]]) -> None:
+    if not checks:
+        return
+    with _lock:
+        _conn.executemany(
+            "INSERT OR REPLACE INTO update_checks (user_id, update_id, item_id, replaced, quote) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [(user_id, update_id, item_id, int(replaced), quote)
+             for update_id, item_id, replaced, quote in checks])
+        _conn.commit()
