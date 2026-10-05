@@ -3,13 +3,26 @@
 An Add/Search memory system for the [Agent Memory Leaderboard](https://agentmemories.ai) (Agent
 Memory Challenge 2026, Academic Methods track, Textual Memory).
 
-**Academic release `academic-v4-20261001`:** `text-embedding-v4` (1024 dimensions) for
-embeddings and `gpt-4o-mini` for fact extraction and recall questions. The public tag
-identifies the fixed release commit. See [RELEASE.md](RELEASE.md) for scope and validation.
+**Release candidate `academic-v4-20261005-rc3`** (built on the `academic-v4-20261001` release):
+`text-embedding-v4` (1024 dimensions, separate credentials and endpoint) for embeddings and
+`gpt-4o-mini` as the only LLM, for fact extraction, recall questions and the explicit-update
+mechanism below. BGE (`bge-small-en-v1.5`) is historical local research only and is not part
+of the academic profile. See [RELEASE.md](RELEASE.md) for scope, validation and status.
+
+rc3 adds, on top of the 20261001 release, three things that are switched on by configuration
+and are all off in code by default: an opt-in diagnostic request log, the **explicit-update
+mechanism** (when a user explicitly replaces or corrects a value, the earlier value can be
+left out of what Search returns; see "Explicit updates" below, which is also the declaration
+of generative-model use in evidence organisation that competition FAQ Q18 asks for), and an
+**admission valve** that answers overload and transient upstream failures with 429/503 plus
+`Retry-After` instead of a 500.
 
 The research numbers below come from historical BGE embeddings and local answer/judge
 runs. They are not official leaderboard scores and do not establish a v4 quality gain.
-The current v4 evidence establishes small-scale integration and contract behavior only.
+The v4 evidence establishes integration and contract behavior, and a small v4 check of the
+explicit-update mechanism. No benchmark data or gold answers are bundled with, or consulted
+by, the service. Platform Smokes have been run (three, on 2026-10-04 and 2026-10-05); the
+official Full has **not** started.
 
 **One sentence:** memories are stored twice — as verbatim timestamped turns and as atomic
 first-person facts — and retrieval asks the log the question *the user themselves would ask*
@@ -23,7 +36,7 @@ at retrieval time than any amount of query rewriting in the question's register.
 ```bash
 git clone https://github.com/linxuhao/ActiveMemoryIndex.git
 cd ActiveMemoryIndex
-git checkout academic-v4-20261001
+git checkout academic-v4-20261005-rc3   # the rc3 release tag
 cp .env.academic.example .env.academic
 # Edit .env.academic: OPENAI_API_KEY, AMI_EMBED_API_KEY, AMI_AUTH_TOKEN,
 # and AMI_EMBED_BASE_URL for the embedding key's region/workspace.
@@ -47,8 +60,9 @@ separate embedding API. The template's Singapore URL is an example: set the endp
 explicitly for your region and, where required, your workspace. The tested deployment
 uses the user-confirmed Beijing workspace endpoint. Credentials are never committed.
 
-The Docker image includes PyTorch and cached BGE weights for optional historical research;
-a clean build downloads dependencies and is about 2.5 GB. The v4 pipeline needs outbound
+The Docker image includes PyTorch and cached BGE weights for optional historical research
+(the academic profile never loads them); a clean build downloads dependencies and is about
+2.5 GB. The v4 pipeline needs outbound
 network access to both providers at startup and during Add/Search, with paid API usage.
 Embedding failures fail startup or the request explicitly; they cannot use the LLM's
 raw-only fallback, silently change model, or commit missing vectors.
@@ -88,11 +102,19 @@ Check the network exists and that the proxy targets the academic container's por
 A network name with no proxy attached can leave the service unreachable even when healthy.
 
 **Cost.** A new Add chunk uses a `gpt-4o-mini` extraction call and embeds its raw turns
-and facts with `text-embedding-v4`. Search uses a recall-question call and embeds the
-query and recall question. Embedding batching, long-text segmentation and retries affect
-API request counts and charges. Ranking over stored vectors remains local. Experimental
-agentic/DCI calls are disabled in the academic release. No cost or throughput projection
-for an official Full has been established by the small synthetic checks.
+and facts with `text-embedding-v4`. With `AMI_UPDATE_DETECT=1` it also makes one stage-1
+call (stage 2 only when stage 1 accepted an explicit replacement or correction), run beside
+the extraction call. Search uses a recall-question call and embeds the query and recall
+question; with `AMI_UPDATE_WITHHOLD=1` a Search whose result would lose a withheld item adds
+one router call (cached per query), and the first Search after an update may add verifier
+calls (their verdicts are stored, so each pair is judged once). Embedding batching,
+long-text segmentation and retries affect API request counts and charges. Ranking over
+stored vectors remains local. Experimental agentic/DCI calls are disabled in the academic
+release. No cost or throughput projection for an official Full has been established by the
+small synthetic checks; the capacity measurements that exist (fake and real upstream, BEAM
+shapes) are in `bench/results/beam_capacity_20261004.md` on branch
+`codex/beam-capacity-20261004`, and the real-provider throughput of one Add is dominated by
+the embedding gate.
 
 **Unauthenticated surface:** `/health` (liveness only; store counts and LLM
 counters require the same secret as Search) and FastAPI's generated `/docs`,
@@ -134,6 +156,16 @@ All configuration is environment variables; **no credential is stored in this re
 | `AMI_CONTAINER` / `AMI_IMAGE` / `AMI_VOLUME` | `activememoryindex` / `activememoryindex:latest` / `ami-data` | names used by compose; override all three to run a second copy on one host |
 | `AMI_EDGE_NETWORK` | `ami_edge_unused` | the Docker network your tunnel/proxy connector is on, read by the base compose file (there is no override file). Site-specific. Unset → compose creates the throwaway default; a name matching nothing is created empty, not refused |
 | `AMI_LLM_RETRIES` | `1` | retries per provider call |
+| `AMI_UPDATE_DETECT` | `0` | Add: detect explicit updates (stage 1 intent labelling, stage 2 extraction) and store them as records. See "Explicit updates" |
+| `AMI_UPDATE_RENDER` | `0` | Add, needs `AMI_UPDATE_DETECT`: also store each absolute update's current-value sentence as an extra memory (language-checked) |
+| `AMI_UPDATE_WITHHOLD` | `0` | Search: leave out earlier memories that state a value an explicit update replaced; membership only, nothing is rewritten |
+| `AMI_UPDATE_VERSION` | `7` | explicit-update design version; `7` is the release. Versions 1-6 exist only to reproduce research results |
+| `AMI_UPDATE_CANDIDATES` | `20` | earlier memories handed to the verifier per update |
+| `AMI_ADD_MAX_INFLIGHT` / `AMI_SEARCH_MAX_INFLIGHT` | `0` / `0` | admission valve: at most this many `/add` (`/search`) run at once; `0` = off. See "Admission valve" |
+| `AMI_ADMISSION_WAIT` | `30` | seconds a request may wait for a slot before it is answered 429 |
+| `AMI_RETRY_AFTER` | `10` | `Retry-After` seconds on a valve 429 and on an upstream 503 |
+| `AMI_EXTRACT_REQUIRED` | `0` | `1`: an extraction call that failed upstream (rate limit, timeout, connection, 5xx) fails the Add with 429/503 before anything is stored, instead of storing the turns without facts |
+| `AMI_REQUEST_LOG` | *(empty)* | path of a JSON-lines diagnostic log: every Search's query, options, undocumented fields and returned ids; every Add's message metadata (no content). Off when empty; it is evaluation data, keep it beside the database |
 | `AMI_LLM_MAX_FACTS` | `24` | cap on extracted facts per Add chunk (a cap, not a target) |
 | `AMI_EMBED_DEVICE` / `AMI_EMBED_BATCH` | `cpu` / backend-dependent | device applies to local BGE; batch defaults to 64 for BGE and 10 for remote v4 (academic profile: 10) |
 | `AMI_EMBED_THREADS` | `1` | intra-op threads for the embedder. One is right when the server is already serving concurrently — 16 to 64 requests each opening an OpenMP team oversubscribes the machine and the workers wait in barriers. Measured on 8 cores: Add-shaped calls 3.61/s at 8 threads against 4.53/s at 1; Search-shaped 70.4/s against 101.8/s. `0` leaves torch's heuristic alone |
@@ -145,7 +177,7 @@ turns/original-query retrieval, but this is not a complete academic profile vali
 Remote embedding credentials and successful embeddings remain required; embedding failures
 fail the operation. For historical local research, `.env.example` selects the default BGE
 backend with a separate database; cached BGE retrieval can operate without provider access.
-All experimental mechanisms stay off in `.env.academic.example`.
+All other experimental mechanisms stay off in `.env.academic.example`; only the explicit-update flags and the valve are set.
 
 ## Method
 
@@ -296,29 +328,126 @@ identical configuration moves accuracy by ~0.2pp and flips ~4% of questions, so 
 configurations is what to rely on, not the third decimal. Aggregates are committed in
 `bench/results/`; `bench/README.md` has the commands that regenerate them.
 
+## Explicit updates (opt-in; on in the rc3 release profile)
+
+**What it does.** When a user *explicitly* says that an earlier value is replaced or was
+wrong ("Update: my gym time is now 6 pm", "correction: the dog's name is Biscuit"), the service
+records the update at Add time and, at Search time, leaves the earlier, replaced items out of
+the returned set, so the reader is not shown two conflicting values. It also stores one extra
+memory stating the current value. Nothing else changes: no memory text is edited, relative
+changes ("one more coin") and history or date questions are left untouched, and only the same
+`user_id`'s own history is ever used.
+
+**Model.** `gpt-4o-mini`, the same and only LLM as the rest of the service. Its output is
+never returned as an answer. Five prompts (all in `app/llm.py`):
+
+| prompt | when | what it is for |
+|---|---|---|
+| stage 1, intent classification (`UPDATE_INTENT_SYSTEM`) | Add, beside extraction, only if the chunk has a user turn | labels the user's value-bearing statements (explicit replacement, correction, restatement, new info, relative change, plan, history) and copies a quote. Code accepts only replacement/correction labels whose quote appears verbatim, after whitespace normalisation, in a user turn |
+| stage 2, update extraction (`UPDATE_EXTRACT5_SYSTEM`) | Add, only for statements stage 1 accepted | extracts subject, attribute, new value, old value (only if the turn states it), `subject_is_user`, `relative`, and one present-tense sentence stating the current value in the language of the turn. Code drops an entry whose new value is not in the user turn |
+| render | Add, `AMI_UPDATE_RENDER=1` | the stage-2 current-value sentence is stored as an extra memory beside the extracted facts, only for absolute (not relative) updates and only if it is in the same language as the user's turn. It is derived from the user's own update turn at write time and cannot depend on any later question |
+| search-time verifier (`UPDATE_VERIFY3_SYSTEM`) | Search, first time an (update, earlier memory) pair is needed | given the update and candidate earlier memories (earlier Adds only, mentioning the subject, not mentioning the new value), quotes the value each states and says whether it is DIFFERENT from the new one. Code accepts a verdict only if the quote is in the memory. Verdicts are stored, so each pair is judged once; the verifier never sees the question |
+| search-time router (`QUESTION_SCOPE2_SYSTEM`) | Search, only when a withheld item is in the list the search would return | reads the question and returns two booleans: does it need the past value (history, change, first/initial value), is it time-scoped. If either is true, nothing is withheld. Cached per (query, options). English and CJK date patterns remain as a pre-filter that can only add protection |
+
+**Switches.** `AMI_UPDATE_DETECT` (stage 1 and 2 at Add), `AMI_UPDATE_RENDER` (store the
+current-value sentence), `AMI_UPDATE_WITHHOLD` (verifier, router and withholding at Search),
+`AMI_UPDATE_VERSION=7`. All three flags default to 0 in code; the rc3 release profile
+(`.env.academic.example`) turns them on. With them off the service behaves as the 20261001
+release. A store created without them is compatible: the update tables are added on start.
+
+**Evidence organisation only.** The question selects and withholds evidence; it never
+generates text that is returned. The only model outputs that reach a Search response are
+stored memories: the user's verbatim turns, extracted facts, and the rendered current-value
+sentence that was written at Add time from the user's own words. The router sees the question
+but returns two booleans; the verifier sees no question. Any failure of a model call (timeout,
+rate limit, invalid JSON) at either stage degrades to "no update detected" at Add, and to
+"withhold nothing" at Search; an update call never fails an Add or a Search.
+
+**Evidence** (research branch `research/explicit-update-20261004`, all numbers measured on
+public data; reports not copied here):
+
+* MQuAKE-Remastered CF-3k, 200 cases, 400 edit/multi-hop questions, BGE research stores,
+  `gpt-4o-mini` reader and judge, 2 to 4 replicates: render+withhold beats the baseline by
+  **+65 to +70 correct of 400** (rounds 3 and 4 +70.00; the shipped version 7 +65.00). `bench/results/explicit_update_20261004.md`, `explicit_update_r2_20261004.md`,
+  `explicit_update_r3_20261005.md`, `explicit_update_r4_20261005.md`,
+  `explicit_update_r5_20261005.md`.
+* Check on the real v4 stack (25 fresh MQuAKE cases, 75 questions): **+13.5 of 75**
+  (15 wins, 0 losses, p = 0.0001). `explicit_update_r5_20261005.md`, section RC2.
+* Guards, version 7 (all non-negative): LongMemEval knowledge-update, 78 questions, +0.25
+  (1 win, 0 losses); LoCoMo, 1540 questions, 0 update records and no change to any list;
+  0 conversational items withheld. English history probes: 0 of 24 broken; router held-out
+  sets, recall 0.95 to 1.00 and false protection 0.00 to 0.05 in English, Chinese and Spanish.
+* Earlier rounds, which failed their registered gates on false withholding (round 1: 131 of
+  166 withheld guard items false) and were revised, are kept in the same reports.
+
+These gains come from synthetic update streams in which updates are explicit. In the first
+round the single-hop gain was small (the reader already preferred the explicit update on
+74.5% of edit questions), the multi-hop gain carried the result, and transfer to the
+platform's datasets is unknown. No official score is claimed.
+
+## Admission valve and upstream-error mapping
+
+The platform drives Add at 16 to 64 concurrent requests and Search at 16 to 256, while the
+upstream gates (`AMI_LLM_CONCURRENCY`, `AMI_EMBED_CONCURRENCY`) admit far fewer. Without a
+bound, the excess queues inside the process and, past the ~100 s edge cut, the caller sees a
+524 for an Add that is still running.
+
+* `AMI_ADD_MAX_INFLIGHT` / `AMI_SEARCH_MAX_INFLIGHT` (0 = off) bound concurrent `/add` and
+  `/search` in a pure-ASGI middleware. A request that cannot get a slot within
+  `AMI_ADMISSION_WAIT` seconds (first come, first served) is answered **429 with
+  `Retry-After: AMI_RETRY_AFTER`** *before* authentication, LLM calls, embedding or any write,
+  so a rejected Add persisted nothing and its retry is an ordinary first attempt. Waiting
+  holds no worker thread.
+* A transient embedding failure is no longer an unhandled 500: a provider rate limit becomes
+  429 carrying the provider's `Retry-After` (capped at 60 s); a timeout, connection error or
+  5xx becomes 503 + `Retry-After`. This is raised before `store.add`, so nothing is persisted
+  (this fixed an Add that returned 500 on an upstream `httpx.ReadTimeout`). Non-transient errors
+  stay 500.
+* Extraction is best-effort by default: a failed `gpt-4o-mini` call stores the verbatim turns
+  without facts and Add returns 200. `AMI_EXTRACT_REQUIRED=1` maps it as above instead; the
+  trade is that a long provider outage then exhausts the platform's retry budget rather than
+  degrading. Off by default.
+* Explicit-update calls are optional and are never mapped: a timeout there skips update
+  detection for that chunk (Add still returns 200), and a failed router or verifier call at
+  Search withholds nothing.
+* Valve and mapping counters (`valve_*`) are in the authenticated `/health`.
+
+**Recommended settings for the Full:** `AMI_ADD_MAX_INFLIGHT=16`, `AMI_ADMISSION_WAIT=45`,
+`AMI_RETRY_AFTER=10`, `AMI_SEARCH_MAX_INFLIGHT=0` (Search valve off), and start the platform
+job with Add concurrency 16 and Search concurrency 16. At platform concurrency 16 the valve
+never rejects (a safety net that bounds attempts if the provider slows or concurrency rises).
+The Search valve is left off because Search's platform retry budget is not published and a
+valve at Search concurrency 256 turned a 106 s worst case into a 220 s p95 in the load tests.
+Measurements (fake and real upstream) are in `bench/results/beam_capacity_20261004.md` on
+branch `codex/beam-capacity-20261004`; the valve and update-call tolerance cases (13) are in
+`tests/test_admission.py`.
+
 ## Tests
 
 ```bash
-python3 tests/test_parse_facts.py     # write-path guards; standard library only
-docker run --rm -v "$PWD/tests:/srv/tests:ro" -w /srv activememoryindex \
-  python3 tests/test_concurrency.py   # needs numpy + app deps, so run it in the image
+# Every test file is a plain script with an exit code (not pytest), network-free,
+# with fake LLM and embedder. Run them in the image, which has the dependencies:
+docker run --rm --network none --entrypoint sh -v "$PWD":/w -w /w -e PYTHONPATH=/w \
+  -e HF_HUB_OFFLINE=1 <image> -c 'for t in tests/test_*.py; do python3 $t || echo FAIL $t; done'
 ```
 
 `test_parse_facts.py` pins the two ways a bad LLM reply could poison the store.
-`test_concurrency.py` pins the write path against the platform's retry policy:
-overlapping retries of one `request_id`, and a `request_id` reused by a second
-user. Both are plain scripts with exit codes, not pytest.
+`test_concurrency.py` pins the write path against the platform's retry policy.
+`test_admission.py` pins the valve, the 429/503 mapping with no partial persistence, and that
+explicit-update calls can time out without failing an Add or a Search. `test_updates*.py`
+cover the update mechanism, version by version. rc3: 26 test files, 330 checks, 0 failed.
 
 ## Repository layout
 
 ```
 app/config.py    environment configuration
 app/main.py      FastAPI service: /add, /search, /health
-app/llm.py       the single LLM (gpt-4o-mini): fact extraction + recall-question rewriting
+app/llm.py       the single LLM (gpt-4o-mini): extraction, recall question, update prompts
+app/updates.py   explicit-update detection, candidate selection, verification, withholding
 app/embed.py     text-embedding-v4 adapter; optional historical BGE backend
-app/store.py     SQLite identity/vector guards and per-user in-process cache
+app/store.py     SQLite identity/vector guards, update records, per-user in-process cache
 scripts/         contract smoke test, embedding preflight, prompt calibration
-tests/           adapter/store unittest cases plus baseline plain-script guards
+tests/           unit, contract, update-mechanism and admission-valve tests
 bench/           offline LoCoMo harness used to set the retrieval knobs; not in the image
 bench/results/   committed aggregates behind every number quoted in this file
 ```
@@ -345,14 +474,18 @@ bench/results/   committed aggregates behind every number quoted in this file
   (<https://github.com/AML-memory/agent-memory-leaderboard>) whose answer and judge prompts it
   imports verbatim. Neither is vendored into this repository or into the image.
 * **The service never sees benchmark data.** No dataset, gold answer, or evaluation artefact is
-  bundled in the image or consulted by `/add` or `/search`. `bench/` does read gold answers, but
-  it runs offline, on the author's machine, against public data, and is not part of the
+  bundled in the image or consulted by `/add` or `/search`. `bench/` does read gold answers
+  (LoCoMo, and the public MQuAKE-Remastered, LongMemEval and BEAM data on research branches),
+  but it runs offline, on the author's machine, against public data, and is not part of the
   deployed service (the Dockerfile copies only `app/` and `scripts/`).
 * **Deliberately excluded:** the strongest configuration in the paper above writes each memory into
   a LoRA adapter on a local 9B model and elicits the recall statement from those weights. That
   variant is **not** submitted and **not** implemented here, because the challenge requires the
   LLM components used during Add and Search to be `gpt-4o-mini`, with `text-embedding-v4`
-  for embeddings. Experimental mechanisms are disabled in the academic release profile.
+  for embeddings. The other research mechanisms (agentic search, DCI, fact selection, chunk
+  memory, event dates, fact keys, supersession marks, reranking) are disabled in the
+  academic release profile; the explicit-update mechanism above is the one deliberate
+  exception, declared there.
 * **Integrity:** no hard-coded answers, no benchmark leakage, no prompt injection, no cross-`user_id`
   retrieval, no manual intervention during evaluation. Retrieval scope is `user_id` and only
   `user_id`; `session_id` is stored for provenance and never used to filter.

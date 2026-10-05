@@ -2,25 +2,35 @@
 
 Release metadata and technical notes. Keep in sync with `README.md` and `RELEASE.md`.
 
-On 2026-10-01 the user reported submitting the access application. Approval/Eval Key is
-pending; no issued credential or approval receipt has been independently verified. Official
-platform Smoke and Full have not run. The platform's concrete Answer/Eval models are not
-confirmed; public materials do not establish a DeepSeek model switch.
+**Status (2026-10-05).** On 2026-10-01 the user reported submitting the access application.
+Platform Smokes have since been run (three, on 2026-10-04 and 2026-10-05); the results are
+the platform's and are not reproduced here. The **official Full has not started**. At the time
+of writing the deployed version is release candidate rc2 (the 20261001 release plus the
+explicit-update mechanism); rc3 adds the admission valve and update-call tolerance, is the
+candidate for the Full (see `RELEASE.md`), and has not been deployed or bound to a Full. The
+platform's concrete Answer/Eval models are not confirmed; the
+[official public configuration](https://github.com/AML-memory/agent-memory-leaderboard/blob/main/api_config.py)
+leaves them unset and public materials do not establish a model switch. The participant
+Add/Search requirement (`gpt-4o-mini`, `text-embedding-v4`, per the
+[competition FAQ](https://agentmemories.ai/competition/)) does not identify the platform's
+answerer or judge.
 
 Historical numerical results below use BGE and local answer/judge runs. They are not v4
 benchmark results or official leaderboard scores. This release has functional integration
-validation and makes no v4 quality-gain claim.
+validation and a small v4 check of the explicit-update mechanism; it makes no v4
+quality-gain claim. No benchmark data or gold answers are bundled with or consulted by the
+service.
 
 | field | value |
 |---|---|
 | System name | ActiveMemoryIndex |
-| Version | `academic-v4-20261001`; public tag identifies the fixed release commit |
+| Version | `academic-v4-20261005-rc3` (release candidate; the tag identifies the fixed commit), built on `academic-v4-20261001` |
 | Evaluation type | Textual Memory |
 | Division / route | Academic Methods · API (self-hosted) |
 | Repository | https://github.com/linxuhao/ActiveMemoryIndex |
 | Endpoint URL | `https://amindex.linxuhao.app` (HTTPS, Cloudflare; see the GitHub release notes for deployment verification) |
 | Contact | Xuhao Lin · linxuhao84@gmail.com · independent researcher |
-| Models used by Add and Search | `gpt-4o-mini` for extraction/recall; remote `text-embedding-v4`, 1024 dimensions, for embeddings |
+| Models used by Add and Search | `gpt-4o-mini` only, for extraction, recall questions and the explicit-update prompts; remote `text-embedding-v4`, 1024 dimensions, for embeddings. BGE is historical local research only |
 
 ## Key flow
 
@@ -46,7 +56,7 @@ deployment and shared with the platform through the access-request flow (stored 
 ```bash
 git clone https://github.com/linxuhao/ActiveMemoryIndex.git
 cd ActiveMemoryIndex
-git checkout academic-v4-20261001
+git checkout academic-v4-20261005-rc3   # the rc3 release tag
 cp .env.academic.example .env.academic
 # Set OPENAI_API_KEY, AMI_EMBED_API_KEY, AMI_AUTH_TOKEN and region/workspace endpoint.
 AMI_ENV_FILE=.env.academic docker compose --env-file .env.academic -p ami-academic up -d --build
@@ -60,11 +70,14 @@ AMI_ENV_FILE=.env.academic docker compose --env-file .env.academic -p ami-academ
 | `AMI_EMBED_BACKEND` / `AMI_EMBED_MODEL` / `AMI_EMBED_DIMENSIONS` | `openai` / `text-embedding-v4` / `1024` |
 | `AMI_AUTH_SCHEME` / `AMI_AUTH_TOKEN` | `bearer` / Memory System Key shared privately with platform |
 | `AMI_DB_PATH` / `AMI_VOLUME` | Fresh `/data/memory-v4.sqlite3` / `ami-academic-v4-data`; never reuse BGE vectors |
+| `AMI_UPDATE_DETECT` / `AMI_UPDATE_RENDER` / `AMI_UPDATE_WITHHOLD` / `AMI_UPDATE_VERSION` | `1` / `1` / `1` / `7` in the rc3 profile (all three flags default `0` in code): the explicit-update mechanism, declared below |
+| `AMI_ADD_MAX_INFLIGHT` / `AMI_SEARCH_MAX_INFLIGHT` / `AMI_ADMISSION_WAIT` / `AMI_RETRY_AFTER` | `16` / `0` / `45` / `10`: admission valve for the Full (Add valve 16, Search valve off); start the platform job with Add 16 and Search 16 |
 
 The release retains raw turns plus facts, extraction and recall enabled, recall weight `0.5`,
 raw-first ordering, neighbor window radius `1`, at most `100` results within `top_k`, and a
 `400000`-character response budget. Agentic, hop2, DCI, fact-evidence/selection, chunk-memory,
-event-date, fact-key/supersession, chronology/newest and cross-encoder experiments remain off.
+event-date, fact-key/supersession-mark, chronology/newest and cross-encoder experiments remain
+off; the explicit-update mechanism (below) is the one deliberate addition.
 
 - Add: `POST https://amindex.linxuhao.app/add`
 - Search: `POST https://amindex.linxuhao.app/search`
@@ -73,30 +86,48 @@ event-date, fact-key/supersession, chronology/newest and cross-encoder experimen
 - Remote embedding failures fail startup or the request explicitly, without changing model
   or partially storing a successful Add. LLM-only fallback is not an embedding fallback.
 - The service must remain available throughout an evaluation. Public routing and bounded
-  concurrency checks are recorded in the GitHub release notes; sustained capacity is unmeasured.
+  concurrency checks for the 20261001 release are recorded in its GitHub release notes;
+  sustained Full capacity is unmeasured (the load tests on a fake and a real upstream are in
+  `bench/results/beam_capacity_20261004.md`, branch `codex/beam-capacity-20261004`).
+- Under overload or a transient upstream failure the service answers 429/503 with
+  `Retry-After` (admission valve, below) rather than 500, before anything is persisted.
 
 ## Validation and evaluation flow
 
-The fixed release app source passed **105 checks**: 26 adapter/store unit tests, 41 baseline
-checks and 38 Add/Search contract checks through the real SDK and a loopback fake embedding
-API in a network-none container with temporary storage. The earlier candidate used identical
-embed/store/main/LLM code; its small synthetic real-provider test observed 17 v4 HTTP requests
-(all 200, 1024 dimensions) and 15 `gpt-4o-mini` requests (all 200), plus 38 contract checks and
-42/37 controls before/after restart. The 19 persisted items across four synthetic users,
-long Unicode source, vectors, request ledger and embedding identity survived restart exactly.
-Release config removes unused DCI research additions, and release DCI uses the base version.
-These are integration checks, not benchmark quality, production throughput or Full results.
-See `RELEASE.md` for scope and evidence references.
+**rc3 source tests.** The whole suite, run network-free in a container with fake LLM and
+embedder: **26 test files, 330 checks, 0 failed** (291 plain-script checks and 39 unittest
+cases), including 13 admission-valve and update-call-timeout cases and the explicit-update
+suites. The 20261001 release's own validation (105 checks; 17 real v4 and 15 real
+`gpt-4o-mini` requests, all 200; 38 contract checks; 42/37 controls before/after restart;
+19 persisted items across four synthetic users surviving a restart exactly) is recorded in
+`RELEASE.md`. Contract and overload checks of the rc3 image are listed there too. These are
+integration checks, not benchmark quality, production throughput or Full results.
 
-1. Access application submitted on 2026-10-01 (user report); approval/Eval Key pending.
-2. Use the fixed source tag and verify the authenticated public endpoint before evaluation.
-3. Once the platform issues the Eval Key, run its official Smoke and inspect the result.
-4. Start official Full only after readiness and Smoke pass, using current platform limits
-   documented at [the competition page](https://agentmemories.ai/competition/).
+**Explicit-update results** (public MQuAKE-Remastered, LongMemEval and LoCoMo data; research
+branch `research/explicit-update-20261004`, reports `bench/results/explicit_update_*.md`):
+render+withhold **+65 to +70 correct of 400** MQuAKE edit/multi-hop questions on BGE research
+stores (shipped version 7: +65.00), **+13.5 of 75** (15 wins, 0 losses, p = 0.0001) on the
+real v4 stack, guards non-negative (LongMemEval knowledge-update +0.25 of 78; LoCoMo 1540
+unchanged). Details in the explicit-update section below.
+
+**Evaluation flow.**
+
+1. Access application submitted on 2026-10-01 (user report). Platform Smokes have been run
+   (three, 2026-10-04/05).
+2. Use the fixed rc3 tag and verify the authenticated public endpoint before the Full.
+3. Run the platform's official Smoke against the bound version and inspect it (at most 30
+   per key/track this cycle, at most one per hour; private).
+4. Start the official Full only after readiness and Smoke pass: at most two per key/track,
+   the second only 30 days after the first completes. A Full usually takes 0.5 to 2 days,
+   results are private before review, and once accepted the version cannot be replaced or
+   withdrawn because of unfavourable results; the latest valid Full replaces the prior one.
+   After a Full is accepted, models, algorithm, prompts and result-changing implementation
+   cannot change (FAQ Q29). Use the platform limits documented at
+   [the competition page](https://agentmemories.ai/competition/). **The official Full has not
+   started.**
 
 The platform's Answer/Eval model configuration is distinct from participant extraction and
-recall. Its exact models are unconfirmed; refer to the official
-[API configuration](https://github.com/AML-memory/agent-memory-leaderboard/blob/main/api_config.py).
+recall; its exact models are unconfirmed.
 
 ---
 
@@ -127,12 +158,17 @@ experiment results at the time of this submission.
 ```
 Add  ──→  verbatim store (timestamped turns)
   │        + fact store (gpt-4o-mini extraction)
+  │        + explicit-update detection beside extraction (stage 1 / stage 2; optional,
+  │          a failed call skips it) and a rendered current-value memory
   │        + text-embedding-v4 embeddings (1024 dimensions)
   │        + SQLite commit
-  └──→  200 (only after persistence is searchable)
+  └──→  200 (only after persistence is searchable); 429/503 + Retry-After
+        (before any write) when overloaded or the embedding/extraction upstream fails
 
 Search ──→  recall-question rewrite ("Did I tell you about …?")
          │  + fused embedding retrieval (original query + recall question)
+         │  + earlier values an explicit update replaced are left out (verifier,
+         │    router; a failed call withholds nothing)
          │  + optional agentic gap-check (off by default; see method changes)
          │  + deduplicate, trim under character budget
          └──→  evidence only, never an answer
@@ -188,6 +224,59 @@ the memory text itself.
 Search returns memory evidence only. It never produces or disguises a final answer, and never
 reads outside the requested `user_id`.
 
+### Explicit updates: declaration of generative-model use in evidence organisation (FAQ Q18)
+
+FAQ Q18 allows summarising, structuring or organising legitimately written memories within
+the declared method, provided the content comes only from the same `user_id`'s allowed
+history, no future information, external answers or gold labels are introduced, and the
+current question is never read to generate a final answer that is then disguised as a
+historical memory. The explicit-update mechanism stays inside those boundaries:
+
+* **Model:** `gpt-4o-mini` only. Its output never becomes an answer.
+* **Purpose:** when a user explicitly replaces or corrects a value, record that fact and keep
+  the earlier, replaced value out of the returned set, so the reader is not shown two
+  conflicting values.
+* **Prompts, all in `app/llm.py`:**
+  1. *Stage 1, intent classification* (Add): labels the user's value-bearing statements and
+     quotes them; code keeps only explicit replacements and corrections whose quote is found
+     verbatim (whitespace-normalised) in a user turn.
+  2. *Stage 2, update extraction* (Add, only for accepted statements): subject, attribute,
+     new value (must appear in the user turn), old value (only if stated), whether the subject
+     is the user, whether the change is relative, and one present-tense sentence stating the
+     current value in the turn's language.
+  3. *Render* (Add): that sentence is stored as one extra memory beside the extracted facts,
+     only for absolute updates and only if its language matches the user's turn. It is
+     derived from the user's own update turn when the chunk is written, before any question
+     exists.
+  4. *Search-time verifier*: shown the update and candidate earlier memories of the same
+     user (earlier Adds only), quotes the replaced value in each and says whether it differs
+     from the new one; code requires the quote to be in the memory. It never sees the
+     question; verdicts are stored.
+  5. *Search-time router*: reads the question and returns two booleans (needs the past value;
+     time-scoped). If either is true, nothing is withheld. It is called only when withholding
+     would change the returned list, and cached per query.
+* **Switches:** `AMI_UPDATE_DETECT`, `AMI_UPDATE_RENDER`, `AMI_UPDATE_WITHHOLD`,
+  `AMI_UPDATE_VERSION=7`; the three flags are off in code and on in the rc3 profile.
+* **The query only selects or withholds evidence.** No returned text is generated from the
+  question: Search returns verbatim turns, extracted facts and the Add-time rendered
+  sentence, minus the withheld items. Relative updates, history/date questions and the update's
+  own Add chunk are never withheld. Any failed model call degrades to "no update" at Add and
+  "withhold nothing" at Search.
+* **Results:** MQuAKE-Remastered (public) +65 to +70 of 400 on BGE research stores, +13.5 of 75
+  on v4, guards non-negative; reports on `research/explicit-update-20261004`
+  (`explicit_update_r5_20261005.md` and rounds 1 to 4). See `README.md` for the full summary.
+
+### Admission valve and upstream-error mapping
+
+`AMI_ADD_MAX_INFLIGHT` / `AMI_SEARCH_MAX_INFLIGHT` (0 = off) bound concurrent work in
+a pure-ASGI middleware; a request without a slot within `AMI_ADMISSION_WAIT` s is answered
+429 + `Retry-After: AMI_RETRY_AFTER` before authentication, any model call or any write.
+Embedding rate limit → 429 with the provider's `Retry-After`; timeout/connection/5xx → 503 +
+`Retry-After`, raised before persistence, instead of a 500. `AMI_EXTRACT_REQUIRED=1` (default 0)
+applies the same mapping to a failed extraction call. Explicit-update calls are tolerated, never
+mapped. Counters in authenticated `/health`. Recommended for the Full: Add 16, wait 45, Search
+valve off, platform concurrency 16/16. See `README.md`.
+
 ### Key design decisions
 
 | Decision | Rationale |
@@ -197,6 +286,8 @@ reads outside the requested `user_id`.
 | Agentic reflection, off by default | Measured at zero end-to-end gain once the full `top_k` is returned; kept in the code behind `AMI_AGENTIC_SEARCH` |
 | Fill `top_k` (100) | Swept 1→100 against the platform's own answer/judge prompts: accuracy is monotone increasing for `gpt-4o-mini`, reversing the paper's 9B dilution prior; confirmed on a held-out subset |
 | Timestamps in content text | The platform answer model resolves relative time from content, not `created_at` |
+| Explicit-update withholding (opt-in, on in rc3) | An explicit "replace/correct" by the user makes the earlier value stale; leaving it out of the returned set measured +65 to +70 of 400 on public MQuAKE-Remastered and was non-negative on the guards; the query only selects evidence |
+| Admission valve, Add only | 429 + Retry-After before any write is a retry the platform sanctions; Search valve stays off because Search's retry budget is unpublished |
 
 ## 全部方法改动 · All Method Changes from the Original Paper
 
@@ -271,10 +362,12 @@ What is **new** in this submission (not in the paper):
    short return set; on `gpt-4o-mini` accuracy rises monotonically with the returned count
    (see the read-path section above).
 6. **Production service wrapper** — FastAPI, bearer auth, Docker deployment, Cloudflare
-   tunnel, user-scoped idempotent re-add, persistent embedding identity and vector validation.
-   LLM fallback does not replace the required remote embedding service. None of this infrastructure
-   exists in the research codebase.
-7. **Contract compliance** — Synchronous persistence (200 only after SQLite commit),
+   tunnel, user-scoped idempotent re-add, persistent embedding identity and vector validation,
+   admission valve and 429/503 mapping. LLM fallback does not replace the required remote
+   embedding service. None of this infrastructure exists in the research codebase.
+7. **Explicit-update withholding** — described above (FAQ Q18 declaration). New in this
+   submission; not in the paper.
+8. **Contract compliance** — Synchronous persistence (200 only after SQLite commit),
    `user_id` isolation, `request_id` echo, 422 on malformed input, `/health` liveness.
    These are competition requirements, not research concerns.
 
