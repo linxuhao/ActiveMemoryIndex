@@ -623,11 +623,6 @@ def _search(request: SearchRequest) -> dict:
     if index.matrix is None or not index.items:
         return {"data": []}
 
-    # Earlier items stating a value the user explicitly replaced. Empty unless
-    # AMI_UPDATE_WITHHOLD is on and this user has update records.
-    withheld = (updates.withheld(index, request.user_id, request.query)
-                if config.UPDATE_WITHHOLD else set())
-
     # Round 1: standard fused retrieval. With slots reserved for a second round
     # it takes fewer, so the second round is not competing for the same places.
     reserved = 0
@@ -636,6 +631,19 @@ def _search(request: SearchRequest) -> dict:
     scores1 = rank(index, request.query, request.options)
     if config.RERANK_MODEL:
         scores1 = rerank.rescore(index, request.query, scores1)
+
+    # Earlier items stating a value the user explicitly replaced. Empty unless
+    # AMI_UPDATE_WITHHOLD is on and this user has update records.
+    withheld = (updates.withheld(index, request.user_id, request.query)
+                if config.UPDATE_WITHHOLD else set())
+    if withheld and config.UPDATE_VERSION >= 5:
+        # Ask whether the question needs the old value only when withholding
+        # would change what is returned; otherwise it is a no-op anyway.
+        trial = select(index, scores1, request.top_k,
+                       limit_override=min(request.top_k, config.RETURN_LIMIT) - reserved if reserved else None)
+        if not any(item.id in withheld for item, _ in trial) or \
+                updates.question_protected(request.query, request.options):
+            withheld = set()
     chosen1 = select(index, scores1, request.top_k,
                      limit_override=min(request.top_k, config.RETURN_LIMIT) - reserved if reserved else None,
                      withheld=withheld)

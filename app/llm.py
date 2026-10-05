@@ -553,6 +553,45 @@ For each statement give:
 
 Return JSON only: {"updates": [{"statement": 0, "subject": "...", "attribute": "...", "new_value": "...", "old_value": null, "relative": false, "current": "..."}]}. Leave out a statement that changes no value."""
 
+UPDATE_EXTRACT5_SYSTEM = """You extract the value change stated by a user's statement, for a personal memory index.
+
+You get a chunk of a conversation (turns numbered `N | [date time] Speaker: text`, "I" is the user) and one or more numbered statements the user made in it, each quoted from a turn. Statements can be in any language.
+
+For each statement give:
+- "statement": its number;
+- "subject": whose or what property changes, exactly as written; "me" when it is the user's own;
+- "subject_is_user": true when the property belongs to the user, the speaker "I", in any language ("my gym time", "我的地址", "mi número"), else false;
+- "attribute": a short noun phrase naming the property;
+- "new_value": the new value, copied exactly as written in the turn;
+- "old_value": the replaced value copied exactly as written in the turn, or null when the turn does not state it. Never guess it;
+- "relative": true when the new value is defined by the old one instead of stated outright, in any language: "one more", "added two", "increased by 10", "increased to 5", "又加了一个", "多了两个", "增加到五个", "uno más"; else false;
+- "current": one standalone present-tense sentence stating the current value, without the old value, written in the same language as the quoted statement: an English statement gets an English sentence, a Chinese statement a Chinese one. Never translate.
+
+Return JSON only: {"updates": [{"statement": 0, "subject": "...", "attribute": "...", "new_value": "...", "old_value": null, "subject_is_user": false, "relative": false, "current": "..."}]}. Leave out a statement that changes no value."""
+
+# Round 5: is a Search question one that needs the replaced value? One call per
+# Search, only when withholding would change the returned set; cached per query.
+QUESTION_SCOPE_SYSTEM = """You read a question that will be answered from a person's memory log and say what it asks for. The question can be in any language.
+
+- "needs_past_value": true when it asks for an earlier, original, initial or previous value, for what was said first or at the start, about a change, or compares values over time. "What was my address before I moved?" "Which phone number did I first give you?" "How did my team size change?" "我原来的电话号码是多少？" "最初我说的预算是多少？" "¿Cuál era mi dirección anterior?"
+- "time_scoped": true when it asks about the state at a specific date, period or as-of point other than now. "What was her job title as of September 5, 2025?" "Which party was he in in January 1976?" "截至2024年1月，他住在哪里？" "¿Dónde vivía en 2019?"
+
+Both are false when it asks for the current value or a plain fact, even if it says "now" or "currently" or mentions that something changed: "What is my gym time now?" "现在会议几点？" "¿Cuál es mi dirección actual?" "My budget went from $500 to $700 — what is it now?"
+
+Return JSON only: {"needs_past_value": false, "time_scoped": false}"""
+
+# Round 5b (version 6): the round-5 prompt read "I previously said X; what is
+# it now?" and "之前，…是什么？" as current-value questions.
+QUESTION_SCOPE2_SYSTEM = """You read a question that will be answered from a person's memory log and say what it asks for. The question can be in any language.
+
+- "needs_past_value": true when the question asks for an earlier, original, initial or previous value, for what was said first or at the start, about a change, or compares values over time. Also true when it refers back to an earlier value without giving the new one and then asks what it is now: "I previously said my gym time was 7 pm; what is it now?", "会议原来在3号房间，现在在哪里？", "La reunión antes era en la sala 3; ¿dónde es ahora?". Words such as before, previously, used to, originally, at first, at the start, 之前, 以前, 原来, 最初, 一开始, 曾经, antes, anteriormente, al principio, originalmente usually mean true. More examples: "Which phone number did I first give you?" "How did my team size change?" "之前，这本书的作者是谁？" "¿Cuál era mi dirección anterior?"
+- "time_scoped": true when it asks about the state at a specific date, period or as-of point other than now. "What was her job title as of September 5, 2025?" "Which party was he in in January 1976?" "截至2024年1月，他住在哪里？" "¿Dónde vivía en 2019?"
+
+Both are false when it asks for the current value or a plain fact, including when it states the change itself with the new value and asks what holds now: "What is my gym time now?" "My budget went from $500 to $700 — what is it now?" "通勤时间从10分钟变成了15分钟，现在是多少？" "Mi alquiler subió de 1.200 a 1.350 dólares; ¿cuánto pago ahora?" "现在会议几点？" "¿Cuál es mi dirección actual?"
+
+Return JSON only: {"needs_past_value": false, "time_scoped": false}"""
+
+
 UPDATE_VERIFY2_SYSTEM = """You check which earlier memories state a value that a later explicit update replaced.
 
 You get the update (its own words, the subject, the attribute, the new value and, when known, the old value) and numbered memories `N | text` written before it. Memories can be in any language.
@@ -599,7 +638,8 @@ def extract_updates(numbered: str, statements: list[tuple[int, str]]) -> list[di
     if not config.llm_available() or not statements:
         return None
     listed = "\n".join(f"S{k} | turn {turn} | {quote}" for k, (turn, quote) in enumerate(statements))
-    payload = _json_object(_complete(UPDATE_EXTRACT_SYSTEM, f"Chunk:\n{numbered}\n\nStatements:\n{listed}",
+    prompt = UPDATE_EXTRACT5_SYSTEM if config.UPDATE_VERSION >= 5 else UPDATE_EXTRACT_SYSTEM
+    payload = _json_object(_complete(prompt, f"Chunk:\n{numbered}\n\nStatements:\n{listed}",
                                      config.LLM_MAX_TOKENS_UPDATES))
     if payload is None:
         return None
@@ -639,3 +679,21 @@ def verify_replaced_v2(update: str, memories: list[str]) -> list[tuple[int, str]
         if isinstance(quote, str) and quote.strip() and 0 <= number < len(memories):
             out.append((number, quote.strip()))
     return out
+
+
+def classify_question(query: str, options: list[str] | None) -> dict | None:
+    """{"needs_past_value": bool, "time_scoped": bool}, or None on any failure
+    (the caller then withholds nothing). Both keys must be booleans."""
+    if not config.llm_available():
+        return None
+    user = f"Question: {query}"
+    if options:
+        user += "\nAnswer options: " + " | ".join(str(o) for o in options[:10])
+    prompt = QUESTION_SCOPE2_SYSTEM if config.UPDATE_VERSION >= 6 else QUESTION_SCOPE_SYSTEM
+    payload = _json_object(_complete(prompt, user, 60))
+    if payload is None:
+        return None
+    past, scoped = payload.get("needs_past_value"), payload.get("time_scoped")
+    if not isinstance(past, bool) or not isinstance(scoped, bool):
+        return None
+    return {"needs_past_value": past, "time_scoped": scoped}

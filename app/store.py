@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS updates (
     old_value  TEXT,
     relative   INTEGER NOT NULL,
     statement  TEXT,
+    subject_is_user INTEGER,
     created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_updates_user ON updates(user_id);
@@ -76,7 +77,7 @@ CREATE TABLE IF NOT EXISTS update_checks (
 );
 CREATE INDEX IF NOT EXISTS idx_update_checks_user ON update_checks(user_id);
 """
-UPDATE_FIELDS = ("id", "item_id", "subject", "attribute", "new_value", "old_value",
+UPDATE_FIELDS = ("id", "item_id", "subject", "attribute", "new_value", "old_value", "subject_is_user",
                  "relative", "statement", "created_at")
 
 
@@ -171,6 +172,10 @@ def init() -> None:
                 connection.execute("ALTER TABLE items ADD COLUMN fact_key TEXT")
             if config.UPDATE_DETECT or config.UPDATE_WITHHOLD:
                 connection.executescript(UPDATE_SCHEMA)
+                # Stores made before round 5b: add the column, empty.
+                update_columns = {row[1] for row in connection.execute("PRAGMA table_info(updates)")}
+                if "subject_is_user" not in update_columns:
+                    connection.execute("ALTER TABLE updates ADD COLUMN subject_is_user INTEGER")
             dimensions = _bind_embedding_identity(connection)
             connection.commit()
         except Exception:
@@ -323,9 +328,11 @@ def stats() -> dict:
 def _insert_updates(user_id: str, request_id: str | None, updates: list[dict]) -> None:
     _conn.executemany(
         "INSERT OR REPLACE INTO updates (id, user_id, request_id, item_id, subject, attribute, "
-        "new_value, old_value, relative, statement, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "new_value, old_value, relative, statement, created_at, subject_is_user) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [(u["id"], user_id, request_id, u["item_id"], u["subject"], u["attribute"], u["new_value"],
-          u.get("old_value"), int(bool(u.get("relative"))), u.get("statement"), u.get("created_at"))
+          u.get("old_value"), int(bool(u.get("relative"))), u.get("statement"), u.get("created_at"),
+          int(bool(u.get("subject_is_user"))))
          for u in updates],
     )
 

@@ -14,7 +14,7 @@ import numpy as np  # noqa: E402
 
 from app import config, embed, llm, main, store, updates  # noqa: E402
 
-config.UPDATE_VERSION = 4
+config.UPDATE_VERSION = 4  # round 4 exactly; version 5 in test_updates_v5.py
 ok = True
 
 
@@ -38,7 +38,7 @@ check(not updates.earlier(index, 2, 1) and not updates.earlier(index, 2, 3),
       "version 4: an earlier turn or a fact of the update's own Add is not")
 config.UPDATE_VERSION = 3
 check(updates.earlier(index, 2, 1) and updates.earlier(index, 2, 3), "version 3 (round 3) still treats them as earlier")
-config.UPDATE_VERSION = 4
+config.UPDATE_VERSION = 4  # round 4 exactly; version 5 in test_updates_v5.py
 
 
 def fake_vectors(texts, is_query=False):

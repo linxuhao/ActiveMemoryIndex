@@ -24,11 +24,13 @@ rewritten, and no answer is produced: the returned set only loses items.
 """
 from __future__ import annotations
 
+import collections
 import concurrent.futures
 import functools
 import logging
 import re
 import threading
+import time
 
 import numpy as np
 
@@ -63,6 +65,11 @@ DATED_QUESTION = re.compile(
     r"\d{4}[-/]\d{1,2}[-/]\d{1,2}|\bas of\b|"
     r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?,?\s+"
     r"(?:\d{1,2}(?:st|nd|rd|th)?,?\s+)?\d{4}\b|\b(?:1[0-9]|20)\d{2}s?\b", re.I)
+
+# Round 5: a Chinese/Japanese year or month-day ("1976年", "1月12日") has no word
+# boundary before the CJK character, so DATED_QUESTION misses it. Pre-filter
+# only: a hit adds protection, a miss decides nothing.
+DATED_CJK = re.compile(r"\d{4}\s*年|\d{1,2}\s*月\s*\d{1,2}\s*[日号]")
 
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, config.LLM_CONCURRENCY),
                                                   thread_name_prefix="updates")
@@ -100,6 +107,48 @@ def is_user_turn(item: store.Item) -> bool:
 
 def protected_question(query: str) -> bool:
     return bool(HISTORY_QUESTION.search(query) or DATED_QUESTION.search(query))
+
+
+def prefilter_protected(query: str) -> bool:
+    """Version 5 pre-filter: the patterns may only ADD protection."""
+    return protected_question(query) or bool(DATED_CJK.search(query))
+
+
+_scope_cache: "collections.OrderedDict[tuple, bool]" = collections.OrderedDict()
+_scope_lock = threading.Lock()
+SCOPE_CACHE_MAX = 10_000
+
+
+def question_protected(query: str, options: list[str] | None) -> bool:
+    """Version 5: True when the question needs the replaced value (past value,
+    change, first/initial value) or is time-scoped. Pre-filter hit → True
+    without a call; otherwise one gpt-4o-mini call, cached per (query,
+    options). Any failure → True: withhold nothing."""
+    if prefilter_protected(query):
+        stats["scope_prefilter"] += 1
+        return True
+    key = (query, tuple(str(o) for o in options or ()))
+    with _scope_lock:
+        if key in _scope_cache:
+            _scope_cache.move_to_end(key)
+            return _scope_cache[key]
+    started = time.monotonic()
+    try:
+        verdict = llm.classify_question(query, options)
+    except Exception:  # noqa: BLE001 - fail safe
+        log.exception("question classification failed")
+        verdict = None
+    stats["scope_calls"] += 1
+    stats["scope_seconds"] += time.monotonic() - started
+    if verdict is None:
+        stats["scope_failures"] += 1
+        return True
+    protected = verdict["needs_past_value"] or verdict["time_scoped"]
+    with _scope_lock:
+        _scope_cache[key] = protected
+        while len(_scope_cache) > SCOPE_CACHE_MAX:
+            _scope_cache.popitem(last=False)
+    return protected
 
 
 # --- Add ----------------------------------------------------------------------
@@ -194,6 +243,10 @@ def parse_updates(entries: list[dict], raw_items: list[store.Item]) -> list[dict
         subject, attribute, new = (_text(entry.get(k)) for k in ("subject", "attribute", "new_value"))
         if not (subject and attribute and new) or not mentions(item.content, new):
             continue
+        own_flag = entry.get("subject_is_user")
+        own_flag = own_flag is True or (isinstance(own_flag, str) and own_flag.strip().lower() == "true")
+        if config.UPDATE_VERSION == 5 and own_flag:
+            subject = "me"  # round 5 as registered (superseded: it hid the subject from the verifier)
         old = _text(entry.get("old_value"))
         if old and (not mentions(item.content, old) or _norm(old) == _norm(new)):
             old = None
@@ -205,6 +258,10 @@ def parse_updates(entries: list[dict], raw_items: list[store.Item]) -> list[dict
         records.append({
             "id": f"{item.id}-u{number}", "item_id": item.id, "subject": subject,
             "attribute": attribute, "new_value": new, "old_value": old, "relative": relative,
+            # Round 5b (version 6): kept beside the subject text, which the
+            # verifier still needs; a false "own" only narrows candidates to the
+            # user's turns and drops the subject-mention requirement.
+            "subject_is_user": own_flag if config.UPDATE_VERSION >= 6 else False,
             "statement": _text(entry.get("statement"), 400), "created_at": item.created_at,
         })
     return records
@@ -212,7 +269,8 @@ def parse_updates(entries: list[dict], raw_items: list[store.Item]) -> list[dict
 
 ACCEPTED_INTENTS = {"EXPLICIT_REPLACEMENT", "CORRECTION"}
 # Round-2 call accounting, read by the bench (and /health is untouched).
-stats = {"chunks": 0, "stage1": 0, "accepted": 0, "stage2": 0, "records": 0, "render_language_fallback": 0}
+stats = {"chunks": 0, "stage1": 0, "accepted": 0, "stage2": 0, "records": 0, "render_language_fallback": 0,
+         "scope_prefilter": 0, "scope_calls": 0, "scope_failures": 0, "scope_seconds": 0.0}
 
 
 def _ws(text: str) -> str:
@@ -323,7 +381,13 @@ def candidates(index: store.UserIndex, record: dict) -> list[int]:
     update_row = index.by_id.get(record["item_id"])
     if update_row is None or index.matrix is None:
         return []
-    own = _norm(record["subject"]) in SELF
+    self_text = _norm(record["subject"]) in SELF
+    own = self_text or (config.UPDATE_VERSION >= 6 and bool(record.get("subject_is_user")))
+    # Version 7: the flag only narrows candidates to the user's turns; the
+    # subject must still be mentioned unless the subject text is the user
+    # marker itself (stage 2 writes "me"). Version 6 dropped it on the flag,
+    # and a wrongly flagged "Step 2" update withheld an unrelated turn.
+    skip_mention = self_text if config.UPDATE_VERSION >= 7 else own
     rows = []
     for row, item in enumerate(index.items):
         if row == update_row or item.kind not in ("raw", "fact"):
@@ -334,7 +398,7 @@ def candidates(index: store.UserIndex, record: dict) -> list[int]:
             continue
         if record["old_value"] and not mentions(item.content, record["old_value"]):
             continue
-        if not own and not mentions(item.content, record["subject"]):
+        if not skip_mention and not mentions(item.content, record["subject"]):
             continue
         if own and item.kind == "raw" and config.UPDATE_VERSION >= 2 and not is_user_turn(item):
             continue  # the user's own attribute: only the user's own turns
@@ -413,7 +477,9 @@ def _chunk_facts(index: store.UserIndex, user_id: str, records: list[dict],
         update_row = index.by_id.get(record["item_id"])
         if update_row is None:
             continue
-        own = _norm(record["subject"]) in SELF
+        own = _norm(record["subject"]) in SELF or (config.UPDATE_VERSION >= 6 and bool(record.get("subject_is_user")))
+        if config.UPDATE_VERSION >= 7:
+            own = _norm(record["subject"]) in SELF  # only the subject text waives the mention (see candidates())
         confirmed = [(item_id, quote) for (update_id, item_id), (replaced, quote) in list(checks.items())
                      if update_id == record["id"] and replaced and item_id.rsplit("-", 1)[1].startswith("r")]
         for raw_id, quote in confirmed:
@@ -450,8 +516,10 @@ def _lock(user_id: str) -> threading.Lock:
 
 
 def withheld(index: store.UserIndex, user_id: str, query: str) -> set[str]:
-    """Item ids to leave out of this search's returned set."""
-    if protected_question(query):
+    """Item ids to leave out of this search's returned set. Version 5 applies
+    only the pre-filter here; main._search asks question_protected() when the
+    result would actually change."""
+    if (prefilter_protected(query) if config.UPDATE_VERSION >= 5 else protected_question(query)):
         return set()
     records = [r for r in store.get_updates(user_id) if not r["relative"]]
     if not records:

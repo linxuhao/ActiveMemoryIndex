@@ -289,7 +289,19 @@ LLM_MAX_TOKENS_VERIFY = _int("AMI_LLM_MAX_TOKENS_VERIFY", 400)
 # 4 (default): version 3 plus the same-Add exclusion: nothing from the update's
 # own Add request (raw turn or fact) is ever withheld
 # (bench/results/explicit_update_r4_preregistration.md).
-UPDATE_VERSION = _int("AMI_UPDATE_VERSION", 4)
+# 5 (default): version 4 with the language-dependent decisions moved to
+# gpt-4o-mini: a per-Search question classifier (needs the past value? time
+# scoped?) called only when withholding would change the returned set, and
+# stage-2 "subject_is_user"/"relative" fields. The English patterns remain
+# only as pre-filters that can add protection
+# (bench/results/explicit_update_r5_preregistration.md).
+# 6 (default, "round 5b"): version 5 with subject_is_user kept as its own field
+# beside the subject text, and a revised router prompt. Version 5 as
+# registered failed its gate (explicit_update_r5_20261005.md).
+# 7 (default): version 6, but subject_is_user only narrows candidates to the
+# user's turns; the subject-mention requirement is waived only when the
+# subject text is the user marker ("me") itself.
+UPDATE_VERSION = _int("AMI_UPDATE_VERSION", 7)
 LLM_MAX_TOKENS_INTENT = _int("AMI_LLM_MAX_TOKENS_INTENT", 500)
 
 # --- direct corpus interaction ------------------------------------------------
