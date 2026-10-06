@@ -191,6 +191,18 @@ def said(content: str) -> tuple[dt.date | None, str]:
     return day, content[match.end():]
 
 
+def combine(parsed: Period, routed: Period | None) -> Period:
+    """The period to apply. The router normalises any language, but tends to
+    write a month as its first day ("August 2025" -> "2025-08-01"), so it may
+    not narrow a period the parser read at month or day precision. It decides
+    when the parser found only a year, or when the two disagree."""
+    if routed is None:
+        return parsed
+    year_only = parsed == _span(parsed[0].year)
+    inside = parsed[0] <= routed[0] and routed[1] <= parsed[1]
+    return parsed if inside and not year_only else routed
+
+
 def overlaps(a: Period, b: Period) -> bool:
     return a[0] <= b[1] and a[1] >= b[0]
 
@@ -301,7 +313,7 @@ def select_withheld(index: store.UserIndex, scores, query: str, options: list[st
         verdict = None
     if verdict is None or verdict["kind"] == "other":
         return set()
-    period = verdict.get("as_of") or period
+    period = combine(period, verdict.get("as_of"))
     out = withhold(period, pool, returned, state=verdict["kind"] == "as_of_state")
     stats["applied"] += bool(out & returned_ids)
     stats["withheld"] += len(out & returned_ids)

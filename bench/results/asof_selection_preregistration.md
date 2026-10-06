@@ -109,3 +109,16 @@ put in the prompt.
 ≈ 1.3M gpt-4o-mini tokens to ingest TempReason and synthetic streams (with
 update detection on), ≈ 4–6M for answering and judging changed lists, ≈ 0.1M
 for router calls; text-embedding-v4 < 0.5M. Counted by the proxy ledger.
+
+## Amendment 1 (2026-10-06, router development; before any validation search)
+
+Router check on development data only: the smoke's 150 TempReason L2
+questions, its 80 dated + 16 "now" synthetic questions, and 10 hand-written
+event questions (no LoCoMo text). ≈ 0.2M tokens. Classification was correct on
+all 256 (TR-L2 150/150 as-of state, synthetic dated 80/80 as-of state, "now"
+16/16 other, event 10/10 event); the prompt is unchanged. One defect in how
+the code used the router's date: the router writes a month as its first day
+("as of August 2025" -> "2025-08-01"), which would have narrowed a month to one
+day. Fixed in code (`asof.combine`): the router's date replaces the parsed one
+only when the parser found a bare year or the two disagree. Unit test added.
+The validation runs use the commit that records this amendment.

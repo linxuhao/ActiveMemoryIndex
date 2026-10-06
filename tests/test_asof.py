@@ -67,6 +67,15 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(asof.ranges("between 2001 and 2003"), [(D(2001, 1, 1), D(2003, 12, 31))])
         self.assertEqual(asof.ranges("I met Ann in 2001 and Bob in 2003"), [])
 
+    def test_router_cannot_narrow_a_parsed_month(self):
+        month = (D(2025, 8, 1), D(2025, 8, 31))
+        self.assertEqual(asof.combine(month, (D(2025, 8, 1), D(2025, 8, 1))), month)
+        year = (D(2019, 1, 1), D(2019, 12, 31))
+        self.assertEqual(asof.combine(year, (D(2019, 3, 1), D(2019, 3, 31))), (D(2019, 3, 1), D(2019, 3, 31)))
+        self.assertEqual(asof.combine(month, (D(2024, 1, 1), D(2024, 1, 31))), (D(2024, 1, 1), D(2024, 1, 31)),
+                         "when they disagree, the router read the whole question")
+        self.assertEqual(asof.combine(month, None), month)
+
     def test_router_dates(self):
         self.assertEqual(asof.parse_iso("2024-03"), (D(2024, 3, 1), D(2024, 3, 31)))
         self.assertEqual(asof.parse_iso("2024"), (D(2024, 1, 1), D(2024, 12, 31)))
