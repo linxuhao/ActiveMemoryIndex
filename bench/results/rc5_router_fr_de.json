@@ -1,0 +1,485 @@
+{
+"written": "2026-10-06, rc5: new French and German router set, written before any rc5 router call",
+"items": [
+{
+"lang": "fr",
+"kind": "history",
+"question": "Quel était le nom de mon ancien vétérinaire avant que je change de cabinet ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "history",
+"question": "Quelle adresse e-mail t'avais-je donnée la toute première fois ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "history",
+"question": "Au départ, combien d'invités devaient venir au baptême ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "history",
+"question": "Quel était mon horaire de travail avant le changement d'équipe ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "history",
+"question": "Où se trouvait mon club de judo avant son déménagement ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "history",
+"question": "Quel prix avais-je annoncé initialement pour mon vélo ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "history",
+"question": "Quelle ligne de bus est-ce que je prenais autrefois pour aller au lycée ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "history",
+"question": "Quel était l'ancien code de la porte d'entrée que je t'avais indiqué ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "previously-now",
+"question": "Je t'avais dit que mon rendez-vous chez le dentiste était à 10 h ; c'est à quelle heure maintenant ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "previously-now",
+"question": "Mon médecin traitant était le docteur Leroy avant — qui est-ce maintenant ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "previously-now",
+"question": "Plus tôt j'avais parlé d'un dîner samedi ; c'est quel jour désormais ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "previously-now",
+"question": "Auparavant ma responsable s'appelait Nadia ; qui me manage aujourd'hui ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "time-scoped",
+"question": "Où est-ce que je travaillais en mars 2021 ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "time-scoped",
+"question": "Quel était mon salaire au premier janvier deux mille vingt-trois ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "time-scoped",
+"question": "Qui était mon colocataire le 30/06/2022 ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "time-scoped",
+"question": "Au début de l'été dernier, combien de livres avais-je lus ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "change",
+"question": "Comment mon temps de trajet a-t-il évolué depuis l'an dernier ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "change",
+"question": "Est-ce que mon loyer a augmenté ou baissé depuis le printemps ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "change",
+"question": "Compare mon ancien et mon nouveau forfait téléphonique.",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "change",
+"question": "Qu'est-ce qui a changé dans mon programme d'entraînement ?",
+"protect": true
+},
+{
+"lang": "fr",
+"kind": "current",
+"question": "Comment s'appelle mon vétérinaire ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "current",
+"question": "Quelle adresse e-mail dois-tu utiliser pour moi ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "current",
+"question": "Combien d'invités viennent au baptême ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "current",
+"question": "Quels sont mes horaires de travail ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "current",
+"question": "Où se trouve mon club de judo ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "current",
+"question": "À quel prix je vends mon vélo ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "current",
+"question": "Quelle ligne de bus je prends pour aller au travail ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "current",
+"question": "Quel est le code de la porte d'entrée ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "current",
+"question": "Qui est mon médecin traitant ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "current",
+"question": "Quand a lieu le dîner ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "from-to-current",
+"question": "Mon rendez-vous est passé de 10 h à 11 h 30 ; à quelle heure dois-je y aller ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "from-to-current",
+"question": "Le dîner a été déplacé de samedi à dimanche — c'est quand ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "from-to-current",
+"question": "Mon loyer est passé de 850 € à 900 € ; combien je paie maintenant ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "from-to-current",
+"question": "Ma responsable a changé, de Nadia à Claire ; qui est ma responsable ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "from-to-current",
+"question": "La réunion a été repoussée du 3 au 10 mai ; quand a-t-elle lieu ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "current-now",
+"question": "Quelle est mon adresse actuelle ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "current-now",
+"question": "Où est-ce que je travaille en ce moment ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "current-now",
+"question": "Combien de livres ai-je lus jusqu'ici ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "current-now",
+"question": "À quelle heure est mon cours de guitare actuellement ?",
+"protect": false
+},
+{
+"lang": "fr",
+"kind": "current-now",
+"question": "Quel forfait téléphonique ai-je maintenant ?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "history",
+"question": "Wie hieß mein Tierarzt, bevor ich die Praxis gewechselt habe?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "history",
+"question": "Welche E-Mail-Adresse habe ich dir ganz am Anfang gegeben?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "history",
+"question": "Wie viele Gäste waren ursprünglich zur Taufe eingeladen?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "history",
+"question": "Welche Arbeitszeiten hatte ich vor dem Schichtwechsel?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "history",
+"question": "Wo war mein Judoverein, bevor er umgezogen ist?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "history",
+"question": "Welchen Preis hatte ich anfangs für mein Fahrrad genannt?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "history",
+"question": "Mit welcher Buslinie bin ich früher zur Schule gefahren?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "history",
+"question": "Wie lautete der alte Haustürcode, den ich dir genannt hatte?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "previously-now",
+"question": "Ich hatte gesagt, mein Zahnarzttermin sei um 10 Uhr; wann ist er jetzt?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "previously-now",
+"question": "Mein Hausarzt war vorher Dr. Lehmann — wer ist es jetzt?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "previously-now",
+"question": "Vorhin sprach ich von einem Abendessen am Samstag; an welchem Tag ist es nun?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "previously-now",
+"question": "Früher war Nadine meine Chefin; wer leitet mein Team heute?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "time-scoped",
+"question": "Wo habe ich im März 2021 gearbeitet?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "time-scoped",
+"question": "Wie hoch war mein Gehalt am ersten Januar zweitausenddreiundzwanzig?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "time-scoped",
+"question": "Wer war am 30.06.2022 mein Mitbewohner?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "time-scoped",
+"question": "Wie viele Bücher hatte ich zu Beginn des letzten Sommers gelesen?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "change",
+"question": "Wie hat sich mein Arbeitsweg seit letztem Jahr verändert?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "change",
+"question": "Ist meine Miete seit dem Frühling gestiegen oder gesunken?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "change",
+"question": "Vergleiche meinen alten und meinen neuen Handytarif.",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "change",
+"question": "Was hat sich an meinem Trainingsplan geändert?",
+"protect": true
+},
+{
+"lang": "de",
+"kind": "current",
+"question": "Wie heißt mein Tierarzt?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "current",
+"question": "Welche E-Mail-Adresse sollst du für mich verwenden?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "current",
+"question": "Wie viele Gäste kommen zur Taufe?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "current",
+"question": "Welche Arbeitszeiten habe ich?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "current",
+"question": "Wo ist mein Judoverein?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "current",
+"question": "Zu welchem Preis verkaufe ich mein Fahrrad?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "current",
+"question": "Mit welcher Buslinie fahre ich zur Arbeit?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "current",
+"question": "Wie lautet der Haustürcode?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "current",
+"question": "Wer ist mein Hausarzt?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "current",
+"question": "Wann ist das Abendessen?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "from-to-current",
+"question": "Mein Termin wurde von 10 Uhr auf 11:30 Uhr verschoben; wann muss ich hin?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "from-to-current",
+"question": "Das Abendessen wurde von Samstag auf Sonntag verlegt — wann ist es?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "from-to-current",
+"question": "Meine Miete ist von 850 € auf 900 € gestiegen; wie viel zahle ich jetzt?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "from-to-current",
+"question": "Meine Chefin hat gewechselt, von Nadine zu Claudia; wer ist meine Chefin?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "from-to-current",
+"question": "Das Meeting wurde vom 3. auf den 10. Mai verschoben; wann findet es statt?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "current-now",
+"question": "Wie lautet meine aktuelle Adresse?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "current-now",
+"question": "Wo arbeite ich derzeit?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "current-now",
+"question": "Wie viele Bücher habe ich bisher gelesen?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "current-now",
+"question": "Um wie viel Uhr ist mein Gitarrenunterricht zurzeit?",
+"protect": false
+},
+{
+"lang": "de",
+"kind": "current-now",
+"question": "Welchen Handytarif habe ich jetzt?",
+"protect": false
+}
+]
+}
