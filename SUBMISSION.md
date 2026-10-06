@@ -2,12 +2,13 @@
 
 Release metadata and technical notes. Keep in sync with `README.md` and `RELEASE.md`.
 
-**Status (2026-10-05).** On 2026-10-01 the user reported submitting the access application.
+**Status (2026-10-06).** On 2026-10-01 the user reported submitting the access application.
 Platform Smokes have since been run (three, on 2026-10-04 and 2026-10-05); the results are
 the platform's and are not reproduced here. The **official Full has not started**. At the time
-of writing the deployed version is release candidate rc2 (the 20261001 release plus the
-explicit-update mechanism); rc3 adds the admission valve and update-call tolerance, is the
-candidate for the Full (see `RELEASE.md`), and has not been deployed or bound to a Full. The
+of writing the deployed version is release candidate rc3 (the 20261001 release plus the
+explicit-update mechanism and the admission valve). rc4 adds a token-aware return budget,
+request deadlines, the rc4 embedding settings and as-of evidence selection; it is the
+candidate for the Full (see `RELEASE.md`) and has not been deployed or bound to a Full. The
 platform's concrete Answer/Eval models are not confirmed; the
 [official public configuration](https://github.com/AML-memory/agent-memory-leaderboard/blob/main/api_config.py)
 leaves them unset and public materials do not establish a model switch. The participant
@@ -24,13 +25,13 @@ service.
 | field | value |
 |---|---|
 | System name | ActiveMemoryIndex |
-| Version | `academic-v4-20261005-rc3` (release candidate; the tag identifies the fixed commit), built on `academic-v4-20261001` |
+| Version | `academic-v4-20261006-rc4` (release candidate; the tag identifies the fixed commit), built on `academic-v4-20261001` |
 | Evaluation type | Textual Memory |
 | Division / route | Academic Methods · API (self-hosted) |
 | Repository | https://github.com/linxuhao/ActiveMemoryIndex |
 | Endpoint URL | `https://amindex.linxuhao.app` (HTTPS, Cloudflare; see the GitHub release notes for deployment verification) |
 | Contact | Xuhao Lin · linxuhao84@gmail.com · independent researcher |
-| Models used by Add and Search | `gpt-4o-mini` only, for extraction, recall questions and the explicit-update prompts; remote `text-embedding-v4`, 1024 dimensions, for embeddings. BGE is historical local research only |
+| Models used by Add and Search | `gpt-4o-mini` only, for extraction, recall questions, the explicit-update prompts and the as-of router; remote `text-embedding-v4`, 1024 dimensions, for embeddings. BGE is historical local research only |
 
 ## Key flow
 
@@ -56,7 +57,7 @@ deployment and shared with the platform through the access-request flow (stored 
 ```bash
 git clone https://github.com/linxuhao/ActiveMemoryIndex.git
 cd ActiveMemoryIndex
-git checkout academic-v4-20261005-rc3   # the rc3 release tag
+git checkout academic-v4-20261006-rc4   # the rc4 release tag
 cp .env.academic.example .env.academic
 # Set OPENAI_API_KEY, AMI_EMBED_API_KEY, AMI_AUTH_TOKEN and region/workspace endpoint.
 AMI_ENV_FILE=.env.academic docker compose --env-file .env.academic -p ami-academic up -d --build
@@ -72,12 +73,18 @@ AMI_ENV_FILE=.env.academic docker compose --env-file .env.academic -p ami-academ
 | `AMI_DB_PATH` / `AMI_VOLUME` | Fresh `/data/memory-v4.sqlite3` / `ami-academic-v4-data`; never reuse BGE vectors |
 | `AMI_UPDATE_DETECT` / `AMI_UPDATE_RENDER` / `AMI_UPDATE_WITHHOLD` / `AMI_UPDATE_VERSION` | `1` / `1` / `1` / `7` in the rc3 profile (all three flags default `0` in code): the explicit-update mechanism, declared below |
 | `AMI_ADD_MAX_INFLIGHT` / `AMI_SEARCH_MAX_INFLIGHT` / `AMI_ADMISSION_WAIT` / `AMI_RETRY_AFTER` | `16` / `0` / `45` / `10`: admission valve for the Full (Add valve 16, Search valve off); start the platform job with Add 16 and Search 16 |
+| `AMI_EMBED_TIMEOUT` / `AMI_EMBED_RETRIES` / `AMI_EMBED_CONCURRENCY` | `40` / `1` / `16` (rc4 defaults and profile): per-attempt timeout, retries, provider requests in flight; every attempt is clipped to the request deadline |
+| `AMI_ADD_DEADLINE` / `AMI_SEARCH_DEADLINE` | `85` / `85` s from arrival (admission wait included): an upstream call the deadline leaves no time for is not made; 503 + `Retry-After`, nothing persisted |
+| `AMI_ANSWER_INPUT_TOKENS` / `AMI_ANSWER_PROMPT_TOKENS` / `AMI_ANSWER_ITEM_TOKENS` / `AMI_TOKEN_SAFETY` | `117760` / `1024` / `20` / `1.15`: token-aware return budget against the platform's Answer window (always on) |
+| `AMI_ASOF_SELECT` | `1` in the rc4 profile (default `0` in code): as-of evidence selection, declared below; passed its pre-registered gate |
+| `AMI_ADAPTIVE_CHUNK` | `0`: adaptive chunk delivery; failed its pre-registered gate, not used |
 
 The release retains raw turns plus facts, extraction and recall enabled, recall weight `0.5`,
-raw-first ordering, neighbor window radius `1`, at most `100` results within `top_k`, and a
-`400000`-character response budget. Agentic, hop2, DCI, fact-evidence/selection, chunk-memory,
-event-date, fact-key/supersession-mark, chronology/newest and cross-encoder experiments remain
-off; the explicit-update mechanism (below) is the one deliberate addition.
+raw-first ordering, neighbor window radius `1`, at most `100` results within `top_k`, a
+`400000`-character response budget and, from rc4, a token budget sized to the platform's Answer
+window. Agentic, hop2, DCI, fact-evidence/selection, chunk-memory, adaptive-chunk, event-date,
+fact-key/supersession-mark, chronology/newest and cross-encoder experiments remain off; the
+explicit-update mechanism and as-of evidence selection (below) are the deliberate additions.
 
 - Add: `POST https://amindex.linxuhao.app/add`
 - Search: `POST https://amindex.linxuhao.app/search`
@@ -94,14 +101,22 @@ off; the explicit-update mechanism (below) is the one deliberate addition.
 
 ## Validation and evaluation flow
 
-**rc3 source tests.** The whole suite, run network-free in a container with fake LLM and
-embedder: **26 test files, 330 checks, 0 failed** (291 plain-script checks and 39 unittest
-cases), including 13 admission-valve and update-call-timeout cases and the explicit-update
-suites. The 20261001 release's own validation (105 checks; 17 real v4 and 15 real
+**rc4 source tests.** The whole suite, run network-free in the rc4 image with fake LLM and
+embedder: **30 test files, 376 checks, 0 failed**, including the rc4 cases for the token budget
+(9), request deadlines against a fake slow upstream (11), adaptive chunks (8) and as-of
+selection (18). rc3's suite (26 files, 330 checks) is part of it. The 20261001 release's own validation (105 checks; 17 real v4 and 15 real
 `gpt-4o-mini` requests, all 200; 38 contract checks; 42/37 controls before/after restart;
 19 persisted items across four synthetic users surviving a restart exactly) is recorded in
 `RELEASE.md`. Contract and overload checks of the rc3 image are listed there too. These are
 integration checks, not benchmark quality, production throughput or Full results.
+
+**rc4 studies** (pre-registered, one replicate, platform answer/judge prompts with
+`gpt-4o-mini`; `bench/results/*_20261006.md`): as-of selection passed (TempReason L2 fresh +24
+of 200, new synthetic profiles +6 of 100, pooled 31 wins / 1 loss; LoCoMo dated 0 of 194 and
+LongMemEval knowledge-update 0 of 78). Adaptive chunk delivery failed: +5.6 points over the
+shipped selection on 770 held-out LoCoMo questions, but exactly equal (540 = 540) to an
+equal-text control, so the gain is volume, not the unit. A zero-fact extraction fallback
+failed (+1 of 94 on ScriptMem against +2 required) and is not in rc4.
 
 **Explicit-update results** (public MQuAKE-Remastered, LongMemEval and LoCoMo data; research
 branch `research/explicit-update-20261004`, reports `bench/results/explicit_update_*.md`):
@@ -114,7 +129,7 @@ unchanged). Details in the explicit-update section below.
 
 1. Access application submitted on 2026-10-01 (user report). Platform Smokes have been run
    (three, 2026-10-04/05).
-2. Use the fixed rc3 tag and verify the authenticated public endpoint before the Full.
+2. Use the fixed rc4 tag and verify the authenticated public endpoint before the Full.
 3. Run the platform's official Smoke against the bound version and inspect it (at most 30
    per key/track this cycle, at most one per hour; private).
 4. Start the official Full only after readiness and Smoke pass: at most two per key/track,
@@ -221,6 +236,17 @@ the memory text itself.
    Returning 100 won every pairwise comparison on both tuning subsets and was then confirmed on a
    held-out subset never used for tuning (n=464, accuracy 0.584). Details and method in `bench/`.
 
+6. **Token budget (rc4):** the platform's Answer window is 117,760 input tokens shared with
+   the instructions, the question and its options, and Answer keeps a token-counted prefix of
+   what does not fit. Each Search's memories get `(117,760 − 1,024) / 1.15` tokens minus the
+   question and options (o200k_base via tiktoken; 20 tokens per memory for its formatting); a
+   memory that does not fit is skipped, never cut, and the response never exceeds the budget.
+   The 400,000-character budget stays as an extra cap. Measurements:
+   `bench/results/token_budget_20261006.md`.
+7. **As-of evidence selection (rc4, on in the profile):** for a question asking for a state at a
+   stated date, returned items not valid at that date are withheld and their slots refilled from
+   the ranking (declared below).
+
 Search returns memory evidence only. It never produces or disguises a final answer, and never
 reads outside the requested `user_id`.
 
@@ -266,6 +292,36 @@ historical memory. The explicit-update mechanism stays inside those boundaries:
   on v4, guards non-negative; reports on `research/explicit-update-20261004`
   (`explicit_update_r5_20261005.md` and rounds 1 to 4). See `README.md` for the full summary.
 
+### As-of evidence selection: declaration of generative-model use (FAQ Q18)
+
+Within the same Q18 boundaries as the explicit-update mechanism:
+
+* **Model:** `gpt-4o-mini` only, one prompt (`ASOF_SCOPE_SYSTEM` in `app/llm.py`), at Search.
+  Its output never becomes an answer and is never returned.
+* **Purpose:** a question such as "What was Maya's job title as of 5 September 2025?" is
+  answered with the latest value when later values are also returned. For such a question,
+  items not valid at the stated date are left out of the returned set: (a) an item stating
+  explicit date ranges none of which overlaps the date, when another returned item's range
+  does; (b) an item said after the date that names no year, when another returned item was said
+  by then — unless it uses relative-time wording and was said within 31 days.
+* **What the model does:** reads the question (and options) and returns `{"kind": "as_of_state"
+  | "event" | "other", "as_of": "YYYY[-MM[-DD]]"}`. Rule (b) applies only to `as_of_state`, rule
+  (a) to `as_of_state` and `event`, nothing to `other`. It is called only when the question
+  contains a year in digits and the rules, at the period a multilingual date parser read, would
+  change the returned list; cached per question. Any failure withholds nothing.
+* **The query only selects evidence.** Nothing is rewritten or generated; the freed slots are
+  refilled with stored memories from the ranking. Switch: `AMI_ASOF_SELECT` (off in code, on in
+  the rc4 profile). Result and router behaviour: `bench/results/asof_selection_20261006.md`.
+
+### Request deadlines
+
+Every Add and Search carries a deadline (`AMI_ADD_DEADLINE` / `AMI_SEARCH_DEADLINE`, 85 s from
+arrival, admission wait included) under the ~100 s edge cut. Every `gpt-4o-mini` and embedding
+attempt is clipped to it, retries are made only while time is left, an Add's embedding batches
+run side by side, and a call the deadline leaves no time for is answered 503 + `Retry-After`
+before anything is persisted. Real-provider step test at concurrency 16 / timeout 40 s:
+`bench/results/embed_c16_20261006.md`.
+
 ### Admission valve and upstream-error mapping
 
 `AMI_ADD_MAX_INFLIGHT` / `AMI_SEARCH_MAX_INFLIGHT` (0 = off) bound concurrent work in
@@ -288,6 +344,10 @@ valve off, platform concurrency 16/16. See `README.md`.
 | Timestamps in content text | The platform answer model resolves relative time from content, not `created_at` |
 | Explicit-update withholding (opt-in, on in rc3) | An explicit "replace/correct" by the user makes the earlier value stale; leaving it out of the returned set measured +65 to +70 of 400 on public MQuAKE-Remastered and was non-negative on the guards; the query only selects evidence |
 | Admission valve, Add only | 429 + Retry-After before any write is a retry the platform sanctions; Search valve stays off because Search's retry budget is unpublished |
+| Token-aware return budget (rc4) | The Answer window is token-counted and shared with the question; a character cap alone ignores tens-of-KB task prompts and CJK text |
+| Request deadline 85 s (rc4) | Per-call timeouts summed past the ~100 s edge cut; a deadline bounds the whole request and fails it cleanly (503) before persistence |
+| As-of evidence selection (rc4, on) | Passed its pre-registered gate: +30 of 300 on as-of questions (31 W / 1 L), 0 on LoCoMo dated and knowledge-update guards |
+| Adaptive chunk delivery (rc4, off) | +5.6 points on LoCoMo, but identical to an equal-text control: the gain is returned volume, not the delivery unit; failed its gate |
 
 ## 全部方法改动 · All Method Changes from the Original Paper
 
@@ -367,7 +427,11 @@ What is **new** in this submission (not in the paper):
    embedding service. None of this infrastructure exists in the research codebase.
 7. **Explicit-update withholding** — described above (FAQ Q18 declaration). New in this
    submission; not in the paper.
-8. **Contract compliance** — Synchronous persistence (200 only after SQLite commit),
+8. **Token-aware return budget and request deadlines** (rc4) — service engineering against
+   the platform's published Answer window and the edge's request cut; not in the paper.
+9. **As-of evidence selection** (rc4) — described above (FAQ Q18 declaration). New in this
+   submission; not in the paper.
+10. **Contract compliance** — Synchronous persistence (200 only after SQLite commit),
    `user_id` isolation, `request_id` echo, 422 on malformed input, `/health` liveness.
    These are competition requirements, not research concerns.
 
@@ -381,7 +445,8 @@ What was **excluded** from the paper:
 ## Third-party components
 
 Runtime components: DashScope `text-embedding-v4` service, `gpt-4o-mini`, FastAPI, uvicorn,
-SQLite and OpenAI Python SDK. The image also includes sentence-transformers and
+SQLite, OpenAI Python SDK and tiktoken (MIT; its `o200k_base` encoding file is baked into the
+image) for token counting. The image also includes sentence-transformers and
 `BAAI/bge-small-en-v1.5` (MIT) for optional historical research; the academic profile does not
 use BGE. No benchmark data, gold answer or manual relation annotation enters runtime retrieval.
 

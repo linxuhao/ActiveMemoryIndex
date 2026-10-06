@@ -1,3 +1,93 @@
+# Release candidate academic-v4-20261006-rc4
+
+rc4 is the release candidate for the official Full: rc3 (`academic-v4-20261005-rc3`, commit
+`203314d`) plus four changes. The tag `academic-v4-20261006-rc4` identifies the fixed commit
+once the release step creates it; the image is `activememoryindex:academic-v4-20261006-rc4`,
+built from the repository Dockerfile with OCI labels (revision = the tagged commit).
+
+| step | commit | what |
+|---|---|---|
+| rc3 | `203314d` | admission valve, 429/503 mapping, update-call tolerance (deployed) |
+| rc4 code | `99cba0e`, `4356107` | token budget, request deadlines, embedding settings, adaptive chunk (off), as-of selection |
+| rc4 studies | `93b21d3`, `15d0ce8` (pre-registrations), `4209cc0` (results) | see "Studies" |
+| rc4 | this branch | zero-fact fallback removed (failed), docs |
+
+## What rc4 changes
+
+* **Token-aware return budget** (`app/tokens.py`, always on, every delivery mode). The
+  platform's Answer window is 117,760 input tokens shared by instructions, question, options
+  and the returned memories, and Answer keeps a token-counted prefix of what does not fit. Per
+  Search the memories get `(AMI_ANSWER_INPUT_TOKENS − AMI_ANSWER_PROMPT_TOKENS) /
+  AMI_TOKEN_SAFETY − tokens(query) − tokens(options)` = (117,760 − 1,024) / 1.15 − question;
+  each memory costs its tokens + `AMI_ANSWER_ITEM_TOKENS` (20). Counted with tiktoken
+  `o200k_base` (baked into the image); a conservative estimate otherwise. `select()` never
+  exceeds it (a memory that does not fit is skipped, never cut, no first-memory exception);
+  the rendered response is cut to it as a final guard (DCI picks, re-rendering); a query that
+  leaves no room returns `[]` without any model call. The 400,000-character budget remains.
+  Why 1,024 / 20 / 1.15: `bench/results/token_budget_20261006.md`.
+* **Request deadlines and the rc4 embedding settings** (`app/deadline.py`, `app/embed.py`,
+  `app/llm.py`). User decision: `AMI_EMBED_CONCURRENCY=16`, `AMI_EMBED_TIMEOUT=40` (shipped
+  defaults now). An Add embeds 2–5 batches; at 40 s with one retry, sequential batches could
+  take 320 s against the ~100 s edge cut. Now every Add and Search has a deadline
+  (`AMI_ADD_DEADLINE` / `AMI_SEARCH_DEADLINE`, 85 s from arrival including admission wait):
+  batches run side by side inside the shared gate, every LLM and embedding attempt is clipped
+  to the time left, a retry is made only if it can still fit, and a call that cannot is
+  answered **503 + Retry-After before persistence**. The SDK clients make no retries of their
+  own (`max_retries=0`); `AMI_LLM_RETRIES` / `AMI_EMBED_RETRIES` count them in
+  `deadline.call`. Worst case Add/Search ≈ 85 s + persistence.
+* **As-of evidence selection** (`app/asof.py`, `AMI_ASOF_SELECT`, default 0; recommended 1).
+  Passed its pre-registered gate. Declared under FAQ Q18 in `SUBMISSION.md`.
+* **Adaptive chunk delivery** (`AMI_ADAPTIVE_CHUNK`, default 0; recommended 0). Built and
+  tested; failed its gate (the gain equals an equal-text control). Stays off.
+* Not included: the zero-fact extraction fallback (lead L5) failed its gate and was removed.
+
+## Recommended production environment (relative to `academic-rc3-20261005.env`)
+
+```
+AMI_IMAGE=activememoryindex:academic-v4-20261006-rc4
+AMI_EMBED_TIMEOUT=40          # was 20
+AMI_EMBED_CONCURRENCY=16      # was 4
+AMI_ASOF_SELECT=1             # new; passed its gate
+# new, at their defaults (written out so the profile is explicit):
+AMI_ADD_DEADLINE=85
+AMI_SEARCH_DEADLINE=85
+AMI_ANSWER_INPUT_TOKENS=117760
+AMI_ANSWER_PROMPT_TOKENS=1024
+AMI_ANSWER_ITEM_TOKENS=20
+AMI_TOKEN_SAFETY=1.15
+AMI_ADAPTIVE_CHUNK=0          # failed its gate
+```
+
+Everything else as in rc3 (update mechanism on, v7; Add valve 16, wait 45, Search valve off;
+platform job Add 16 / Search 16). Start a new store only if the embedding identity changes; it
+does not between rc3 and rc4.
+
+## Studies (pre-registered, one replicate, platform prompts, gpt-4o-mini)
+
+| study | report | gate | numbers |
+|---|---|---|---|
+| as-of selection | `bench/results/asof_selection_20261006.md` | **passed** | as-of sets +30 of 300 (31 W / 1 L, p = 1.5e-8); LoCoMo dated 0 of 194; KU 0 of 78 |
+| adaptive chunk | `bench/results/adaptive_chunk_20261006.md` | **failed** | LoCoMo 770: L4 − B +5.6 pt (p = 0.0001) but L4 − equal-text control 0 (43 / 43); guards +2 / +1; BEAM pilot 0.496 → 0.484 |
+| zero-fact fallback | `bench/results/zero_fact_fallback_20261006.md` | **failed** | ScriptMem +1 of 94 (needed +2); LoCoMo firing 1 of 399 |
+| embedding c16 / 40 s | `bench/results/embed_c16_20261006.md` | (no gate) | attempt timeouts 2.5 %, calls ok 53 / 55, max call 85.04 s, 0.45 Adds/s embedding-bound |
+
+Spend: 51.05M fresh gpt-4o-mini tokens (cap 60M), 1.27M text-embedding-v4 tokens (cap 15M),
+through a caching, metering proxy (`bench/llm_proxy.py`); real-API concurrency 8 except the
+step test (16, as specified).
+
+## Validation
+
+* Whole suite in the rc4 image, network-free, fake providers: **30 test files, 376 checks,
+  0 failed** (rc3's 330 plus `test_token_budget` 9, `test_deadline` 11, `test_adaptive_chunk`
+  8, `test_asof` 18).
+* Built-image checks on a separate container with a fresh store and the recommended
+  environment (contract smoke, overload, a huge-query Search): see the GitHub release notes.
+
+No official Full has started; rc4 has not been deployed. No benchmark data or gold answers are
+bundled with or consulted by the service.
+
+---
+
 # Release candidate academic-v4-20261005-rc3
 
 rc3 is the release candidate for the official Full. It is the `academic-v4-20261001`

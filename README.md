@@ -3,10 +3,10 @@
 An Add/Search memory system for the [Agent Memory Leaderboard](https://agentmemories.ai) (Agent
 Memory Challenge 2026, Academic Methods track, Textual Memory).
 
-**Release candidate `academic-v4-20261005-rc3`** (built on the `academic-v4-20261001` release):
+**Release candidate `academic-v4-20261006-rc4`** (built on the `academic-v4-20261001` release):
 `text-embedding-v4` (1024 dimensions, separate credentials and endpoint) for embeddings and
-`gpt-4o-mini` as the only LLM, for fact extraction, recall questions and the explicit-update
-mechanism below. BGE (`bge-small-en-v1.5`) is historical local research only and is not part
+`gpt-4o-mini` as the only LLM, for fact extraction, recall questions, the explicit-update
+mechanism and the as-of router below. BGE (`bge-small-en-v1.5`) is historical local research only and is not part
 of the academic profile. See [RELEASE.md](RELEASE.md) for scope, validation and status.
 
 rc3 adds, on top of the 20261001 release, three things that are switched on by configuration
@@ -16,6 +16,13 @@ left out of what Search returns; see "Explicit updates" below, which is also the
 of generative-model use in evidence organisation that competition FAQ Q18 asks for), and an
 **admission valve** that answers overload and transient upstream failures with 429/503 plus
 `Retry-After` instead of a 500.
+
+rc4 adds a **token-aware return budget** (the returned set never exceeds what the platform's
+117,760-token Answer window leaves after the question and options), **request deadlines** (85 s
+per Add/Search for every model and embedding call, 503 + `Retry-After` before persistence
+otherwise) with the rc4 embedding settings (concurrency 16, timeout 40 s), and **as-of evidence
+selection** (opt-in; on in the rc4 profile after passing its pre-registered gate). Adaptive
+chunk delivery was built and failed its gate; it stays off. See "rc4" below.
 
 The research numbers below come from historical BGE embeddings and local answer/judge
 runs. They are not official leaderboard scores and do not establish a v4 quality gain.
@@ -36,7 +43,7 @@ at retrieval time than any amount of query rewriting in the question's register.
 ```bash
 git clone https://github.com/linxuhao/ActiveMemoryIndex.git
 cd ActiveMemoryIndex
-git checkout academic-v4-20261005-rc3   # the rc3 release tag
+git checkout academic-v4-20261006-rc4   # the rc4 release tag
 cp .env.academic.example .env.academic
 # Edit .env.academic: OPENAI_API_KEY, AMI_EMBED_API_KEY, AMI_AUTH_TOKEN,
 # and AMI_EMBED_BASE_URL for the embedding key's region/workspace.
@@ -141,13 +148,18 @@ All configuration is environment variables; **no credential is stored in this re
 | `AMI_WINDOW_RADIUS` | `1` | return each selected verbatim turn with the turns either side of it from the same Add chunk. A single message often is not self-contained — the antecedent, the reply, and the session date are in the neighbours. Neighbours take slots from the same `top_k`, so this trades breadth of sources for local context rather than returning more text. `.6333` → `.6802` on LoCoMo (n=1540, paired p<0.0001); radius 1, 2 and 3 were indistinguishable, so 1 is shipped for keeping the most breadth per slot. `0` disables it |
 | `AMI_RAW_FIRST` | `1` | order the returned set verbatim turns first, extracted facts second; changes order, never membership |
 | `AMI_RETURN_CHAR_BUDGET` | `400000` | character budget for one response; large enough never to truncate `AMI_RETURN_LIMIT` silently |
+| `AMI_ANSWER_INPUT_TOKENS` / `AMI_ANSWER_PROMPT_TOKENS` / `AMI_ANSWER_ITEM_TOKENS` / `AMI_TOKEN_SAFETY` | `117760` / `1024` / `20` / `1.15` | token-aware return budget (always on): memories get (input − prompt) / safety − tokens(query + options), each costing its tokens + 20; counted with tiktoken `o200k_base`. See "rc4" |
+| `AMI_TOKEN_ENCODING` | `o200k_base` | tiktoken encoding; without tiktoken a conservative estimate is used |
+| `AMI_ADD_DEADLINE` / `AMI_SEARCH_DEADLINE` | `85` / `85` | seconds from arrival (admission wait included) within which every upstream call of the request must finish; otherwise 503 + `Retry-After` before persistence. `0` = none |
+| `AMI_ASOF_SELECT` | `0` (rc4 profile: `1`) | as-of evidence selection; `AMI_ASOF_POOL` (`400`) candidates, `AMI_ASOF_GRACE_DAYS` (`31`). See "rc4" |
+| `AMI_ADAPTIVE_CHUNK` / `AMI_ADAPTIVE_CHUNK_TOTAL` | `0` / `120000` | adaptive chunk delivery (S characters; 0 = off). Failed its gate; leave 0 |
 | `AMI_AGENTIC_SEARCH` | `0` | after retrieval, gpt-4o-mini reflects on gaps and may fire a second recall question. Off by default — measured at zero end-to-end gain when the full `top_k` is returned, at the cost of one extra LLM call per search |
 | `AMI_EMBED_BACKEND` | `bge` | `openai` selects the remote academic adapter; the academic profile explicitly sets it |
 | `AMI_EMBED_MODEL` | backend-dependent | academic profile: `text-embedding-v4`; optional local research: `BAAI/bge-small-en-v1.5` |
 | `AMI_EMBED_API_KEY` | *(empty)* | separate embedding credential; `DASHSCOPE_API_KEY` is an alternative. Never inherited from the LLM key |
 | `AMI_EMBED_BASE_URL` | *(empty)* | explicit OpenAI-compatible embedding endpoint for the credential's region/workspace |
 | `AMI_EMBED_DIMENSIONS` | `1024` | vector dimensions for the remote model; fixed to 1024 in the academic profile |
-| `AMI_EMBED_TIMEOUT` / `AMI_EMBED_RETRIES` / `AMI_EMBED_CONCURRENCY` | `25` / `1` / `8` | adapter defaults; academic template sets timeout 20 s, retries 1, concurrency 4 |
+| `AMI_EMBED_TIMEOUT` / `AMI_EMBED_RETRIES` / `AMI_EMBED_CONCURRENCY` | `40` / `1` / `16` | per-attempt timeout (clipped to the request deadline), retries per batch, provider requests in flight; rc4 defaults and profile |
 | `AMI_DB_PATH` | `/data/memory.sqlite3` | SQLite file |
 | `AMI_CACHE_MAX_ITEMS` | `1000000` | upper bound on cached rows across users, evicted least-recently-used and reloaded from SQLite. A v4 float32 vector alone uses 4096 bytes per row, before text, objects and temporary arrays; size this cap for the host. Full capacity has not been established by the small integration checks |
 | `AMI_AUTH_SCHEME` | `bearer` | `none` \| `bearer` \| `token` \| `x-api-key`. Any of the three schemes carrying the right secret is accepted. The service **refuses to start** if a scheme is set and `AMI_AUTH_TOKEN` is empty or a placeholder — use `none` deliberately for local testing. |
@@ -177,7 +189,7 @@ turns/original-query retrieval, but this is not a complete academic profile vali
 Remote embedding credentials and successful embeddings remain required; embedding failures
 fail the operation. For historical local research, `.env.example` selects the default BGE
 backend with a separate database; cached BGE retrieval can operate without provider access.
-All other experimental mechanisms stay off in `.env.academic.example`; only the explicit-update flags and the valve are set.
+All other experimental mechanisms stay off in `.env.academic.example`; only the explicit-update flags, the valve and (rc4) as-of selection are set.
 
 ## Method
 
@@ -328,7 +340,7 @@ identical configuration moves accuracy by ~0.2pp and flips ~4% of questions, so 
 configurations is what to rely on, not the third decimal. Aggregates are committed in
 `bench/results/`; `bench/README.md` has the commands that regenerate them.
 
-## Explicit updates (opt-in; on in the rc3 release profile)
+## Explicit updates (opt-in; on in the rc3 and rc4 release profiles)
 
 **What it does.** When a user *explicitly* says that an earlier value is replaced or was
 wrong ("Update: my gym time is now 6 pm", "correction: the dog's name is Biscuit"), the service
@@ -351,8 +363,8 @@ never returned as an answer. Five prompts (all in `app/llm.py`):
 
 **Switches.** `AMI_UPDATE_DETECT` (stage 1 and 2 at Add), `AMI_UPDATE_RENDER` (store the
 current-value sentence), `AMI_UPDATE_WITHHOLD` (verifier, router and withholding at Search),
-`AMI_UPDATE_VERSION=7`. All three flags default to 0 in code; the rc3 release profile
-(`.env.academic.example`) turns them on. With them off the service behaves as the 20261001
+`AMI_UPDATE_VERSION=7`. All three flags default to 0 in code; the rc3 and rc4 release profiles
+(`.env.academic.example`) turn them on. With them off the service behaves as the 20261001
 release. A store created without them is compatible: the update tables are added on start.
 
 **Evidence organisation only.** The question selects and withholds evidence; it never
@@ -422,6 +434,44 @@ Measurements (fake and real upstream) are in `bench/results/beam_capacity_202610
 branch `codex/beam-capacity-20261004`; the valve and update-call tolerance cases (13) are in
 `tests/test_admission.py`.
 
+## rc4: token budget, deadlines, as-of selection
+
+**Token-aware return budget** (`app/tokens.py`, always on). The official API guide: "The shared
+128,000-token Answer window reserves 8,192 output tokens and 2,048 safety tokens, leaving
+117,760 input tokens. If needed, Answer keeps a token-counted prefix of Search candidates in
+returned rank order." Some official queries are whole task prompts of tens of KB. Each Search's
+memories therefore get `(117,760 − 1,024) / 1.15 − tokens(query) − tokens(options)` tokens;
+each memory costs its tokens plus 20 for the platform's formatting. 1,024 is the instruction
+overhead (largest public answer template: ScriptMem's, 374 o200k tokens); 1.15 covers the
+measured gap between o200k_base and other plausible answer tokenizers on English and Chinese
+(`bench/results/token_budget_20261006.md`). `select()` skips a memory that does not fit
+(never cuts one), every delivery mode is bounded, and the rendered response is cut to the
+budget as a final guard. A query that fills the window returns `[]`.
+
+**Request deadlines.** `AMI_ADD_DEADLINE` / `AMI_SEARCH_DEADLINE` (85 s from arrival, admission
+wait included). Every `gpt-4o-mini` and `text-embedding-v4` attempt is clipped to the time
+left; a retry is made only if it can still finish; an Add's embedding batches run side by side
+inside the shared `AMI_EMBED_CONCURRENCY` gate; a call that cannot be made in time is answered
+503 + `Retry-After` before anything is persisted. With the rc4 settings (concurrency 16,
+timeout 40 s, one retry) a real-provider step test saw 2.5 % of attempts time out, 53 of 55
+Add-shaped calls succeed and the slowest end at 85.04 s (`bench/results/embed_c16_20261006.md`).
+
+**As-of evidence selection** (`app/asof.py`, `AMI_ASOF_SELECT`; off in code, on in the rc4
+profile). For a question about the state of something at a stated date, returned items not
+valid at that date — an explicit date range that misses it; a later statement that names no
+year — are withheld and the slots refilled from the ranking. A year in digits opens the gate; a
+multilingual parser proposes the period; `gpt-4o-mini` decides, only when the list would
+change, whether the question asks for a state as of that time (both rules), an event on that
+date (range rule only) or neither (nothing). Relative-time wording within 31 days is kept.
+Pre-registered result: +30 of 300 as-of questions (31 wins, 1 loss), 0 change on 194 LoCoMo
+dated questions and on 78 knowledge-update questions (`bench/results/asof_selection_20261006.md`).
+It is evidence selection only, declared under FAQ Q18 in `SUBMISSION.md`.
+
+**Adaptive chunk delivery** (`AMI_ADAPTIVE_CHUNK`, off). Whole Add chunks (≤ 4,000 characters)
+or merged spans as single memories: +5.6 points on 770 held-out LoCoMo questions, but exactly
+the score of an equal-text control that keeps the shipped unit, so the gain is returned volume,
+not the unit; it failed its pre-registered gate (`bench/results/adaptive_chunk_20261006.md`).
+
 ## Tests
 
 ```bash
@@ -435,7 +485,9 @@ docker run --rm --network none --entrypoint sh -v "$PWD":/w -w /w -e PYTHONPATH=
 `test_concurrency.py` pins the write path against the platform's retry policy.
 `test_admission.py` pins the valve, the 429/503 mapping with no partial persistence, and that
 explicit-update calls can time out without failing an Add or a Search. `test_updates*.py`
-cover the update mechanism, version by version. rc3: 26 test files, 330 checks, 0 failed.
+cover the update mechanism, version by version. `test_token_budget.py`, `test_deadline.py`
+(fake slow upstream), `test_adaptive_chunk.py` and `test_asof.py` cover rc4. rc4: 30 test
+files, 376 checks, 0 failed.
 
 ## Repository layout
 
@@ -444,6 +496,9 @@ app/config.py    environment configuration
 app/main.py      FastAPI service: /add, /search, /health
 app/llm.py       the single LLM (gpt-4o-mini): extraction, recall question, update prompts
 app/updates.py   explicit-update detection, candidate selection, verification, withholding
+app/asof.py      as-of evidence selection (date parsing, rules, router use)
+app/tokens.py    token-aware return budget (tiktoken o200k_base)
+app/deadline.py  per-request deadline and deadline-aware retries
 app/embed.py     text-embedding-v4 adapter; optional historical BGE backend
 app/store.py     SQLite identity/vector guards, update records, per-user in-process cache
 scripts/         contract smoke test, embedding preflight, prompt calibration
