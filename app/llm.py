@@ -45,21 +45,6 @@ EXTRACT_KEYED_SYSTEM = EXTRACT_SYSTEM.replace(
 )
 assert EXTRACT_KEYED_SYSTEM != EXTRACT_SYSTEM
 
-# AMI_EXTRACT_FALLBACK (lead L5, P2): the shipped prompt runs first, unchanged;
-# only a chunk it returns no facts for is read again with this content prompt.
-EXTRACT_CONTENT_SYSTEM = """You turn a chunk of content into atomic memories for a memory index. The chunk may be a script, play, story or transcript (lines of named characters, narration, scene descriptions, stage directions), or a document, article, report, table, data listing, manual, or a set of rules or instructions, even when it arrives as a user's messages.
-
-Rules:
-1. One fact per line. Each memory must stand alone: no pronouns without a named referent, no "the above", no cross-references.
-2. Keep every specific name, place, title, number, unit, quantity and date exactly as written. Never generalise.
-3. Write in the third person with the names given: who said or did what, to whom, where, and the reason or feeling if stated; what a scene description or stage direction shows (the setting, who is present, what they do).
-4. Tables and data listings: one memory per row or record, naming each column with its value.
-5. Rules, definitions, steps and requirements: one memory each, with their exact numbers and conditions.
-6. If the text carries a date, start the memory with that date in brackets.
-7. Do not answer questions, summarise, or editorialise. No commentary.
-
-Return JSON only: {"facts": ["...", "..."]}. At most %d facts. Return {"facts": []} only if the chunk has no content at all."""
-
 RECALL_SYSTEM = """You write the memory-check question a person would ask their assistant about their own past conversations.
 
 Given a question that will be answered from someone's personal memory log, write ONE short question in that person's own first-person voice, in the register of a chat log, e.g. "Did I tell you about ...?" or "What did I say about ...?".
@@ -345,15 +330,6 @@ def extract_facts(chunk_text: str) -> list[str]:
     if raw is None:
         return []
     facts = _parse_facts(raw)[: config.LLM_MAX_FACTS]
-    if not facts and config.EXTRACT_FALLBACK:
-        # Lead L5 (P2): the personal-memory prompt keeps nothing from a chunk
-        # that is narration, a document or a table. Only such a chunk -- zero
-        # facts from the shipped prompt -- is read again, by a third-person
-        # content prompt; every other chunk is extracted exactly as before.
-        counters["fallback_extractions"] = counters.get("fallback_extractions", 0) + 1
-        again = _complete(EXTRACT_CONTENT_SYSTEM % config.LLM_MAX_FACTS, chunk_text,
-                          config.LLM_MAX_TOKENS_EXTRACT_FALLBACK)
-        facts = _parse_facts(again or "")[: config.LLM_MAX_FACTS]
     if raw and not facts:
         # The call succeeded but nothing parsed — usually a reply truncated by
         # the token cap. Without this the whole fact channel for the chunk

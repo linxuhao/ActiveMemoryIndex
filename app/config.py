@@ -92,13 +92,6 @@ LLM_MAX_TOKENS_EXTRACT_DATED = _int("AMI_LLM_MAX_TOKENS_EXTRACT_DATED", 1600)
 # Feature switches: with no API key both fall back to the raw-text-only path.
 EXTRACT_ENABLED = _env("AMI_EXTRACT", "1") != "0"
 RECALL_QUERY_ENABLED = _env("AMI_RECALL_QUERY", "1") != "0"
-# Zero-fact fallback (lead L5, P2; bench/results/zero_fact_fallback_preregistration.md).
-# A chunk the extraction prompt returns no facts for (narration, a document, a
-# table sent as messages) is read again by a third-person content prompt. One
-# extra gpt-4o-mini call for such a chunk only; every other chunk is extracted
-# exactly as before. Off.
-EXTRACT_FALLBACK = _env("AMI_EXTRACT_FALLBACK", "0") != "0"
-LLM_MAX_TOKENS_EXTRACT_FALLBACK = _int("AMI_LLM_MAX_TOKENS_EXTRACT_FALLBACK", 2400)
 # Local reasoning models (Qwen3, etc.): inject <<DISABLE_THINKING>> into the system
 # message so the gateway's thinking.jinja pre-fills a closed <think> tag. vLLM drops
 # chat_template_kwargs, so this secret-code workaround is the only reliable path.

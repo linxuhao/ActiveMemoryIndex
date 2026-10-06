@@ -116,7 +116,7 @@ def search(args) -> None:
     questions = question_set(args.set, args.store, args.streams)
     if args.n:
         questions = questions[: args.n]
-    patches = {"B": {}, "L4": {"ADAPTIVE_CHUNK": 4000, "ADAPTIVE_CHUNK_TOTAL": 120_000},
+    patches = {"B": {"ADAPTIVE_CHUNK": 0, "ASOF_SELECT": False}, "L4": {"ADAPTIVE_CHUNK": 4000, "ADAPTIVE_CHUNK_TOTAL": 120_000},
                "C": {"ADAPTIVE_CHUNK": 0}, "P": {"ASOF_SELECT": True}}[args.arm]
     target_chars = {}
     if args.arm == "C":
