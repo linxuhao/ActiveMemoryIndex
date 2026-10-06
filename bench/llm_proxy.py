@@ -43,6 +43,7 @@ PURPOSES = (
     ("You turn a chunk of a conversation", "extract"),
     ("You turn a chunk of content", "fallback"),
     ("You read a question that will be answered from a person's memory log and say how it uses a date", "asof"),
+    ("You check memories from a person's memory log against", "asof_items"),
     ("You find EXPLICIT updates", "detect"),
     ("You read a chunk of a conversation and label", "stage1"),
     ("You extract the value change", "stage2"),

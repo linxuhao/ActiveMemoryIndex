@@ -69,7 +69,7 @@ FACTS = {"every morning": "I make coffee with my old coffee maker every morning.
 QUERY = {"query": "What do I make coffee with?", "user_id": "u", "top_k": 100}
 saved = (config.DB_PATH, config.AUTH_SCHEME, config.LLM_API_KEY, config.UPDATE_DETECT, config.UPDATE_WITHHOLD,
          config.UPDATE_VERSION, embed.encode, llm.extract_facts, llm.recall_question, llm.classify_update_intent,
-         llm.extract_updates, llm.verify_replaced_v2)
+         llm.extract_updates, llm.verify_replaced_v2, llm.classify_question)
 config.AUTH_SCHEME, config.LLM_API_KEY = "none", "test-key"
 embed.encode = fake_vectors
 llm.extract_facts = lambda text: [f for k, f in FACTS.items() if k in text]
@@ -81,6 +81,7 @@ llm.extract_updates = lambda numbered, accepted: [
     {"statement": 0, "subject": "me", "attribute": "coffee maker", "new_value": "a new pour-over set",
      "old_value": "old coffee maker", "relative": False, "current": "I make coffee with a new pour-over set."}]
 llm.verify_replaced_v2 = adversarial
+llm.classify_question = lambda q, o: {"needs_past_value": False, "time_scoped": False}  # rc5: every version asks
 
 
 def run(directory, name, version, fresh=True):
@@ -120,7 +121,7 @@ try:
 finally:
     (config.DB_PATH, config.AUTH_SCHEME, config.LLM_API_KEY, config.UPDATE_DETECT, config.UPDATE_WITHHOLD,
      config.UPDATE_VERSION, embed.encode, llm.extract_facts, llm.recall_question, llm.classify_update_intent,
-     llm.extract_updates, llm.verify_replaced_v2) = saved
+     llm.extract_updates, llm.verify_replaced_v2, llm.classify_question) = saved
     store._conn = None
 
 print("\nOK" if ok else "\nFAILED")

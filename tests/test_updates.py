@@ -55,7 +55,8 @@ check(len(records) == 3, "assistant turn, unseen new value, bad turn and missing
 check(records[0]["old_value"] is None, "an old value the turn does not contain is discarded as a guess")
 check(records[0]["id"] == "a" * 16 + "-r0-u0" and records[0]["item_id"] == "a" * 16 + "-r0", "record points at its turn")
 check(records[1]["old_value"] == "7 pm" and records[1]["relative"] is False, "stated old value kept; 'false' string is absolute")
-check(records[2]["relative"] is True, "'added one more' marks a relative update even when the model says absolute")
+check(records[2]["relative"] is False,
+      "rc5: no English word list -- 'added one more' is relative only when the model says so")
 check(updates.parse_updates([{"turn": 0, "subject": "x", "attribute": "y", "new_value": "+2"}],
                             [raw("b" * 16, 0, "x is +2 now")])[0]["relative"], "a signed value is relative")
 check(updates.detector_input([raw("c" * 16, 0, "hi", speaker="Assistant")]) is None, "no user turn: no detector call")
@@ -66,16 +67,9 @@ check(text.startswith("0 | Assistant: xxx") and text.split("\n")[0].endswith(" .
 check(llm._json_object('noise {"updates": []} tail') == {"updates": []} and llm._json_object("prose") is None,
       "reply parsing tolerates noise and rejects prose")
 
-# --- question protection -------------------------------------------------------
-for q in ["What was Frank Herbert's genre before the update?", "What did I previously set my gym time to?",
-          "How did my team size change?", "Which party did X belong to in Jan, 1976?",
-          "What is X's job title as of September 5, 2025?", "What was it on 2024-01-12?",
-          "I used to go at 7, what time now?", "What was my original plan?"]:
-    check(updates.protected_question(q), f"protected: {q}")
-for q in ["What is the country of citizenship of Ellie Kemper?", "What genre is Frank Herbert associated with?",
-          "What is my current gym time?", "What is the updated value of Frank Herbert's genre?",
-          "What is the country of origin of the Fiat Panda?", "Who is the head of state of the country Ellie Kemper is a citizen of?"]:
-    check(not updates.protected_question(q), f"not protected: {q}")
+# --- question protection: the classifier's call, no pattern ----------------------
+check(not hasattr(updates, "protected_question") and not hasattr(updates, "HISTORY_QUESTION"),
+      "rc5: no history/date pattern pre-filter is left")
 
 # --- order -----------------------------------------------------------------------
 digest_old, digest_new = "d" * 16, "e" * 16
@@ -182,11 +176,13 @@ def search(body, withhold):
 
 saved = (config.DB_PATH, config.AUTH_SCHEME, config.LLM_API_KEY, config.UPDATE_DETECT, config.UPDATE_RENDER,
          config.UPDATE_WITHHOLD, embed.encode, llm.extract_facts, llm.recall_question, llm.detect_updates,
-         llm.verify_replaced)
+         llm.verify_replaced, llm.classify_question)
 config.AUTH_SCHEME, config.LLM_API_KEY = "none", "test-key"
 embed.encode = fake_vectors
 llm.extract_facts, llm.recall_question, llm.detect_updates = fake_extract, (lambda q, o: None), fake_detect
 llm.verify_replaced = attribute_aware
+# The search-time router (gpt-4o-mini in the service): the history question needs the old value.
+llm.classify_question = lambda q, o: {"needs_past_value": q == HISTORY["query"], "time_scoped": False}
 try:
     with tempfile.TemporaryDirectory() as directory:
         build(directory, "plain", detect=False)
@@ -258,7 +254,7 @@ try:
 finally:
     (config.DB_PATH, config.AUTH_SCHEME, config.LLM_API_KEY, config.UPDATE_DETECT, config.UPDATE_RENDER,
      config.UPDATE_WITHHOLD, embed.encode, llm.extract_facts, llm.recall_question, llm.detect_updates,
-     llm.verify_replaced) = saved
+     llm.verify_replaced, llm.classify_question) = saved
     store._conn = None
 
 print("\nOK" if ok else "\nFAILED")

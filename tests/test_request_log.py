@@ -40,7 +40,7 @@ line = json.loads(path.read_text().splitlines()[-1])
 ok &= check(line["kind"] == "search" and line["query"].startswith("Today is"), "query is recorded")
 ok &= check(line["options"] == ["(A) dog", "(B) cat"], "options are recorded")
 ok &= check(line["extra"] == {"question_date": "2024/03/01"}, "undocumented fields and values are recorded")
-ok &= check("2024/03/01" in line["time_hints"] and "Today" in line["time_hints"], "time hints are detected")
+ok &= check("time_hints" not in line, "rc5: no language-dependent time-hint pattern in the log")
 ok &= check(line["ids"] == ["a-r0", "a-f0"] and line["returned"] == 2 and line["chars"] == 9,
             "returned ids, count and size are recorded")
 

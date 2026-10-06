@@ -652,15 +652,17 @@ You get a chunk of a conversation (turns numbered `N | [date time] Speaker: text
 
 For each statement give:
 - "statement": its number;
-- "subject": whose or what property changes, exactly as written; "me" when it is the user's own;
+- "subject": whose or what property changes, exactly as written; the word "me" when it is the user's own, whatever the language;
 - "subject_is_user": true when the property belongs to the user, the speaker "I", in any language ("my gym time", "我的地址", "mi número"), else false;
 - "attribute": a short noun phrase naming the property;
 - "new_value": the new value, copied exactly as written in the turn;
 - "old_value": the replaced value copied exactly as written in the turn, or null when the turn does not state it. Never guess it;
 - "relative": true when the new value is defined by the old one instead of stated outright, in any language: "one more", "added two", "increased by 10", "increased to 5", "又加了一个", "多了两个", "增加到五个", "uno más"; else false;
-- "current": one standalone present-tense sentence stating the current value, without the old value, written in the same language as the quoted statement: an English statement gets an English sentence, a Chinese statement a Chinese one. Never translate.
+- "statement_language": the language of the quoted statement, as a lowercase ISO 639-1 code ("en", "zh", "es", "fr", "de", "ja", ...);
+- "current": one standalone present-tense sentence stating the current value, without the old value, written in the same language as the quoted statement: an English statement gets an English sentence, a Chinese statement a Chinese one. Never translate;
+- "current_language": the language you wrote "current" in, as a lowercase ISO 639-1 code.
 
-Return JSON only: {"updates": [{"statement": 0, "subject": "...", "attribute": "...", "new_value": "...", "old_value": null, "subject_is_user": false, "relative": false, "current": "..."}]}. Leave out a statement that changes no value."""
+Return JSON only: {"updates": [{"statement": 0, "subject": "...", "attribute": "...", "new_value": "...", "old_value": null, "subject_is_user": false, "relative": false, "statement_language": "en", "current": "...", "current_language": "en"}]}. Leave out a statement that changes no value."""
 
 # Round 5: is a Search question one that needs the replaced value? One call per
 # Search, only when withholding would change the returned set; cached per query.
@@ -792,25 +794,52 @@ def classify_question(query: str, options: list[str] | None) -> dict | None:
     return {"needs_past_value": past, "time_scoped": scoped}
 
 
-# As-of evidence selection (app/asof.py): one call per distinct Search
-# question, made only when the as-of rules would change the returned set.
-ASOF_SCOPE_SYSTEM = """You read a question that will be answered from a person's memory log and say how it uses a date. The question can be in any language.
+# As-of evidence selection (app/asof.py). Question side: one call per distinct
+# Search question, beside the recall rewrite, cached. Item side: one call for an
+# as-of state question, over the candidates. Neither reads the language with a
+# pattern; both are told the text can be in any language.
+ASOF_SCOPE_SYSTEM = """You read a question that will be answered from a person's memory log and say how it uses a date. The question can be in any language, and its date can be written in any way: in digits, in words, in native numerals or in another calendar.
 
 - "kind":
-  - "as_of_state": it asks what something WAS at, as of, by, in or during a stated date or period: a value, title, role, status, address, city, owner, employer, team, partner, price, count or membership as it stood then. "What was Maya's job title as of September 5, 2025?" "Which team did he play for in January 1976?" "Who owned the house in 2019?" "What side project is Priya running as of 1 June, 2022?" "截至2024年1月，他住在哪里？" "2023年5月时她的职位是什么？" "¿Dónde vivía en marzo de 2019?" "Quel était son poste en janvier 1976 ?"
-  - "event": it asks about something that happened, was done, said, bought, visited or attended on or around a date, or uses the date to point at an event: "What did Tomás do on 1 September 2023?" "Where did I go on the 5th of May 2023?" "Who did I meet at the conference in June 2022?" "What happened to Ines's car on 3 July 2023?" "2023年5月8日我们聊了什么？" "¿Qué compré el 3 de julio de 2023?"
-  - "other": it names no date or period, the year is part of a name, title, model or quantity ("S.S. Lazio 1900", "the 1984 novel"), or it asks for the current value.
-- "as_of": the date or period the question names, written YYYY-MM-DD, YYYY-MM or YYYY at the precision the question gives; null when there is none.
+  - "as_of_state": it asks what something WAS at, as of, by, in or during a stated date or period: a value, title, role, status, address, city, owner, employer, team, partner, vehicle, price, count or membership as it stood then, whatever the tense or wording. "What was Maya's job title as of September 5, 2025?" "Which team did he play for in January 1976?" "Who owned the house in 2019?" "What car was she driving in March 2021?" "截至2024年1月，他住在哪里？" "2023年5月时她的职位是什么？" "2022年8月，他在哪个乐队？" "¿Dónde vivía en marzo de 2019?" "Quel était son poste en janvier 1976 ?" "Bei welchem Verein spielte er am ersten Mai zweitausendzehn?" "二〇一九年三月、彼はどこに住んでいましたか？"
+  - "event_on_date": it asks about something that happened, was done, said, bought, visited or attended on or around a date, or uses the date to point at an event: "What did Tomás do on 1 September 2023?" "Where did I go on the 5th of May 2023?" "Who did I meet at the conference in June 2022?" "2023年5月8日我们聊了什么？" "¿Qué compré el 3 de julio de 2023?"
+  - "other": it names no date or period; the year is part of a name, title, model or quantity ("S.S. Lazio 1900", "the 1984 novel"); the date cannot be placed on a calendar without knowing today's date ("last year", "yesterday"); or it asks for the current value.
+- "start" and "end": the first and the last day of the date or period the question names, as YYYY-MM-DD ("in March 2021": 2021-03-01 and 2021-03-31; "in 2019": 2019-01-01 and 2019-12-31; "as of 5 June 2022": 2022-06-05 and 2022-06-05); null for "other".
 
-Return JSON only: {"kind": "as_of_state", "as_of": "2025-09-05"}"""
+Return JSON only: {"kind": "as_of_state", "start": "2025-09-05", "end": "2025-09-05"}"""
+
+ASOF_ITEMS_SYSTEM = """You check memories from a person's memory log against a question about a past date or period. The question and the memories can be in any language.
+
+You get the question, the period it asks about (its first and last day), and numbered memories `N | said YYYY-MM-DD | text`; "said" is the day the memory was recorded ("unknown" when not known). "I" in a memory is the person who owns the log.
+
+List the numbers of:
+- "valid": memories that state a value of the thing the question asks about as holding during the period: with a date or time span in the text that covers or overlaps the period, or said during the period.
+- "not_valid": memories that state a value of the thing the question asks about together with a date or time span, written in the memory's text, at which that value held, when that time does not overlap the period. A memory whose text gives no such time is not in this list.
+- "about_period": memories said after the last day of the period that nevertheless describe what was the case or what happened during the period: by a date or time span in the text, or by a time reference relative to the day they were said ("yesterday", "last week", "two months ago", in any language) that falls in the period.
+
+A memory can be in no list. Return JSON only: {"valid": [], "not_valid": [], "about_period": []}"""
 
 
-def classify_asof(query: str, options: list[str] | None) -> dict | None:
-    """The router's JSON object ({"kind", "as_of"}), or None on any failure;
-    app/asof.py validates it."""
-    if not config.llm_available():
-        return None
+def _question(query: str, options: list[str] | None) -> str:
     user = f"Question: {query}"
     if options:
         user += "\nAnswer options: " + " | ".join(str(o) for o in options[:10])
-    return _json_object(_complete(ASOF_SCOPE_SYSTEM, user, config.LLM_MAX_TOKENS_ASOF))
+    return user
+
+
+def classify_asof(query: str, options: list[str] | None) -> dict | None:
+    """The classifier's JSON object ({"kind", "start", "end"}), or None on any
+    failure; app/asof.py validates it."""
+    if not config.llm_available():
+        return None
+    return _json_object(_complete(ASOF_SCOPE_SYSTEM, _question(query, options), config.LLM_MAX_TOKENS_ASOF))
+
+
+def judge_asof_items(query: str, options: list[str] | None, period, numbered: str) -> dict | None:
+    """The item judgement's JSON object ({"valid", "not_valid", "about_period"}),
+    or None on any failure; app/asof.py validates it."""
+    if not config.llm_available() or not numbered:
+        return None
+    user = (f"{_question(query, options)}\nPeriod: {period[0].isoformat()} to {period[1].isoformat()}\n\n"
+            f"Memories:\n{numbered}")
+    return _json_object(_complete(ASOF_ITEMS_SYSTEM, user, config.LLM_MAX_TOKENS_ASOF_ITEMS))

@@ -1,8 +1,9 @@
 """Explicit updates, round 5 (AMI_UPDATE_VERSION=5): language-dependent
 decisions moved to gpt-4o-mini. The question classifier is asked only when
-withholding would change the returned set, is cached, fails safe (withhold
-nothing), and the English/CJK patterns can only add protection. Stage 2's
-subject_is_user and relative fields work in any language.
+withholding would change the returned set, is cached, and fails safe (withhold
+nothing). rc5: no English/CJK pattern pre-filter is left; the classifier is
+the only decider. Stage 2's subject_is_user and relative fields work in any
+language.
 LLM and embedder replaced; no network. Run: python tests/test_updates_v5.py
 """
 import hashlib
@@ -40,10 +41,13 @@ llm.classify_question, config.LLM_API_KEY = fake_classifier, "test-key"
 updates._scope_cache.clear()
 
 # --- the question router ---------------------------------------------------------
-check(updates.question_protected("他在1976年属于哪个党？", None) and calls == [],
-      "a CJK year is caught by the pre-filter, no call (the \\b pattern misses it)")
-check(updates.question_protected("What was my address before I moved?", None) and calls == [],
-      "an English history wording is caught by the pre-filter, no call")
+verdicts["他在1976年属于哪个党？"] = {"needs_past_value": False, "time_scoped": True}
+check(updates.question_protected("他在1976年属于哪个党？", None) and len(calls) == 1,
+      "rc5: a CJK year is the classifier's call (no pre-filter)")
+verdicts["What was my address before I moved?"] = {"needs_past_value": True, "time_scoped": False}
+check(updates.question_protected("What was my address before I moved?", None) and len(calls) == 2,
+      "rc5: an English history wording is the classifier's call too")
+calls.clear()
 verdicts["我原来的电话号码是多少？"] = {"needs_past_value": True, "time_scoped": False}
 check(updates.question_protected("我原来的电话号码是多少？", None) and len(calls) == 1,
       "a Chinese history question the patterns miss is protected by the classifier")
@@ -66,10 +70,8 @@ updates.log.disabled = True
 check(updates.question_protected("Where is my office now?", None), "a classifier exception withholds nothing")
 updates.log.disabled = False
 llm.classify_question = fake_classifier
-config.UPDATE_VERSION = 4
-check(not updates.protected_question("我原来的电话号码是多少？"),
-      "version 4 (regex only) does not protect it — the round-4 behaviour")
-config.UPDATE_VERSION = 5
+check(not hasattr(updates, "protected_question") and not hasattr(updates, "DATED_CJK"),
+      "rc5: the regex router of version 4 and the version-5 pre-filter are gone")
 
 # --- stage 2 fields ------------------------------------------------------------------
 turn = store.Item(id=f"{'c' * 16}-r0", kind="raw", parent_id=None, content="I: 更正：我的健身时间改成晚上6点了。",
@@ -79,7 +81,7 @@ rec = updates.parse_updates([{"turn": 0, "subject": "我", "attribute": "健身�
 check(rec["subject"] == "me", "subject_is_user makes a Chinese self subject the user's own")
 rel = updates.parse_updates([{"turn": 0, "subject": "我", "attribute": "硬币", "new_value": "晚上6点",
                               "subject_is_user": True, "relative": True}], [turn])[0]
-check(rel["relative"], "stage-2 relative flag is kept (the English word list cannot see Chinese)")
+check(rel["relative"], "stage-2 relative flag is kept (the only word-level decider)")
 config.UPDATE_VERSION = 4
 check(updates.parse_updates([{"turn": 0, "subject": "我", "attribute": "健身时间", "new_value": "晚上6点",
                               "subject_is_user": True}], [turn])[0]["subject"] == "我",

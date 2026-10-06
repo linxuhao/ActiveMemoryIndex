@@ -25,12 +25,6 @@ log = logging.getLogger("ami")
 app = FastAPI(title="ActiveMemoryIndex", version="1.0.0")
 
 _log_lock = threading.Lock()
-# Anything in a query that could carry the question's own time: ISO/slash
-# dates, "today is", month names with a year, bare years.
-_TIME_HINT = re.compile(
-    r"\d{4}[-/]\d{1,2}[-/]\d{1,2}|\btoday\b|\bcurrent date\b|\bnow\b|"
-    r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? \d{1,2}?,? ?\d{4}\b|"
-    r"\b(?:19|20)\d{2}\b", re.I)
 
 
 def record(kind: str, **fields) -> None:
@@ -509,8 +503,7 @@ def select(index: store.UserIndex, scores: np.ndarray, top_k: int,
     if limit <= 0 or budget <= 0 or tokens_left <= 0:
         return chosen
     if config.ADAPTIVE_CHUNK > 0 and not config.CHUNK_MEMORY:
-        chosen = select_adaptive(index, scores, limit, seen,
-                                 min(budget, config.ADAPTIVE_CHUNK_TOTAL), tokens_left, withheld or set())
+        chosen = select_adaptive(index, scores, limit, seen, budget, tokens_left, withheld or set())
         order(chosen)
         return chosen
     misses = 0
@@ -717,11 +710,11 @@ def startup() -> None:
         config.EMBED_THREADS,
     )
     log.info("budget: answer_input=%d prompt=%d item=%d safety=%.2f counter=%s; deadlines add=%.0fs search=%.0fs; "
-             "embed timeout=%.0fs retries=%d concurrency=%d; adaptive_chunk=%d/%d",
+             "embed timeout=%.0fs retries=%d concurrency=%d; adaptive_chunk=%d",
              config.ANSWER_INPUT_TOKENS, config.ANSWER_PROMPT_TOKENS, config.ANSWER_ITEM_TOKENS,
              config.TOKEN_SAFETY, tokens.backend(), config.ADD_DEADLINE, config.SEARCH_DEADLINE,
              config.EMBED_TIMEOUT, config.EMBED_RETRIES, config.EMBED_CONCURRENCY,
-             config.ADAPTIVE_CHUNK, config.ADAPTIVE_CHUNK_TOTAL)
+             config.ADAPTIVE_CHUNK)
 
 
 @app.get("/health")
@@ -865,7 +858,6 @@ def search(
         record("search", user_id=request.user_id, top_k=request.top_k,
                query=request.query, options=request.options,
                extra={k: v for k, v in (request.model_extra or {}).items()},
-               time_hints=_TIME_HINT.findall(request.query),
                returned=len(data), chars=sum(len(d["content"]) for d in data),
                ids=[d["id"] for d in data],
                ms=round((time.monotonic() - started) * 1000))
@@ -889,6 +881,10 @@ def _search(request: SearchRequest) -> dict:
     reserved = 0
     if config.HOP2_SLOTS > 0 and config.llm_available():
         reserved = max(0, min(config.HOP2_SLOTS, min(request.top_k, config.RETURN_LIMIT) - 1))
+    # As-of classification (app/asof.py) runs beside the recall-question
+    # rewrite inside rank(), so it adds no latency of its own.
+    asof_future = (asof.start_classify(request.query, request.options)
+                   if config.ASOF_SELECT and config.llm_available() else None)
     scores1 = rank(index, request.query, request.options)
     if config.RERANK_MODEL:
         scores1 = rerank.rescore(index, request.query, scores1)
@@ -897,7 +893,7 @@ def _search(request: SearchRequest) -> dict:
     # AMI_UPDATE_WITHHOLD is on and this user has update records.
     withheld = (updates.withheld(index, request.user_id, request.query)
                 if config.UPDATE_WITHHOLD else set())
-    if withheld and config.UPDATE_VERSION >= 5:
+    if withheld:
         # Ask whether the question needs the old value only when withholding
         # would change what is returned; otherwise it is a no-op anyway.
         trial = select(index, scores1, request.top_k,
@@ -906,15 +902,16 @@ def _search(request: SearchRequest) -> dict:
         if not any(item.id in withheld for item, _ in trial) or \
                 updates.question_protected(request.query, request.options):
             withheld = set()
-    if config.ASOF_SELECT and asof.candidate(request.query) is not None:
-        # Items not valid at the question's as-of date (app/asof.py), judged
+    verdict = asof.result(asof_future)
+    if verdict is not None and verdict["kind"] == "as_of_state":
+        # Items not valid at the question's as-of period (app/asof.py), judged
         # against the set that would otherwise be returned; withheld slots are
         # refilled from the ranking by the selection below.
         returned = select(index, scores1, request.top_k,
                           limit_override=min(request.top_k, config.RETURN_LIMIT) - reserved if reserved else None,
                           withheld=withheld, token_budget=token_budget)
         withheld = withheld | asof.select_withheld(
-            index, scores1, request.query, request.options,
+            index, scores1, request.query, request.options, verdict,
             [turn for item, _ in returned for turn in asof.constituents(index, item)])
     chosen1 = select(index, scores1, request.top_k,
                      limit_override=min(request.top_k, config.RETURN_LIMIT) - reserved if reserved else None,

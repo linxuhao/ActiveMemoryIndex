@@ -19,6 +19,13 @@ Precision first. An item is withheld only when every one of these holds:
 Relative updates ("one more") are never used: the old value is the arithmetic's
 input. History- and date-scoped questions withhold nothing.
 
+rc5: no language-dependent pattern or word list decides anything here. Whether
+a question needs the replaced value or is time-scoped is gpt-4o-mini's call
+(question_protected); whether an update is relative, whether its subject is the
+user, and which language its rendered sentence is in are stage 2's own fields.
+The only patterns left are mechanics: our own stamp and speaker label, a sign
+in front of a number, and verbatim containment of quoted values.
+
 Nothing here reads the question beyond the protection check, nothing is
 rewritten, and no answer is produced: the returned set only loses items.
 """
@@ -43,34 +50,13 @@ STAMP = re.compile(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] ")
 # Other speakers' turns are context only; LongMemEval assistant turns average
 # 1,700 characters and would otherwise dominate the call's cost.
 OTHER_TURN_CHARS = 200
-SELF = {"me", "i", "my", "myself", "mine", "user", "the user"}
-# Relative change: the new value is defined by the old one. Words are checked
-# on the whole update turn, the sign only on the value (a timestamp has dashes).
-RELATIVE_WORDS = re.compile(
-    r"\b(?:another|more|fewer|less|add|added|adding|plus|extra|additional|increased?|"
-    r"decreased?|up by|down by|subtract(?:ed)?|minus)\b", re.I)
+# The user, as stage 2 names them: the marker its prompt asks for ("me", in
+# every language) or our own speaker label for the user's turns ("I").
+USER_MARKERS = {"me", "i"}
+# A new value written as a signed number is relative (a timestamp has dashes,
+# so only the value is checked). Language-neutral; the model's "relative" flag
+# is the decider for words.
 RELATIVE_SIGN = re.compile(r"^\s*[+-]\s*\d")
-# Questions that need the replaced value: history, change, comparison. Broad on
-# purpose — a false match only means nothing is withheld for that question.
-# "updated"/"replaced"/"corrected" are left out: "what is the updated X" asks
-# for the current value.
-HISTORY_QUESTION = re.compile(
-    r"\b(?:previous(?:ly)?|before|used to|original(?:ly)?|initial(?:ly)?|at first|formerly|"
-    r"former|prior|earlier|old|older|change[ds]?|changing|switch(?:ed|ing)?|differ(?:ent|ence)?|"
-    r"history|historical(?:ly)?|"
-    r"anymore|no longer|over time|ago|since|increase[ds]?|decrease[ds]?|grew|went up|went down|"
-    r"how many times|then|ever|past|last time|first time)\b", re.I)
-# Explicit dates or as-of scopes. Selecting by date is Mechanism 2, which is not
-# built; until it is, a dated question withholds nothing.
-DATED_QUESTION = re.compile(
-    r"\d{4}[-/]\d{1,2}[-/]\d{1,2}|\bas of\b|"
-    r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?,?\s+"
-    r"(?:\d{1,2}(?:st|nd|rd|th)?,?\s+)?\d{4}\b|\b(?:1[0-9]|20)\d{2}s?\b", re.I)
-
-# Round 5: a Chinese/Japanese year or month-day ("1976年", "1月12日") has no word
-# boundary before the CJK character, so DATED_QUESTION misses it. Pre-filter
-# only: a hit adds protection, a miss decides nothing.
-DATED_CJK = re.compile(r"\d{4}\s*年|\d{1,2}\s*月\s*\d{1,2}\s*[日号]")
 
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, config.LLM_CONCURRENCY),
                                                   thread_name_prefix="updates")
@@ -106,28 +92,15 @@ def is_user_turn(item: store.Item) -> bool:
     return item.kind == "raw" and STAMP.sub("", item.content, count=1).startswith("I: ")
 
 
-def protected_question(query: str) -> bool:
-    return bool(HISTORY_QUESTION.search(query) or DATED_QUESTION.search(query))
-
-
-def prefilter_protected(query: str) -> bool:
-    """Version 5 pre-filter: the patterns may only ADD protection."""
-    return protected_question(query) or bool(DATED_CJK.search(query))
-
-
 _scope_cache: "collections.OrderedDict[tuple, bool]" = collections.OrderedDict()
 _scope_lock = threading.Lock()
 SCOPE_CACHE_MAX = 10_000
 
 
 def question_protected(query: str, options: list[str] | None) -> bool:
-    """Version 5: True when the question needs the replaced value (past value,
-    change, first/initial value) or is time-scoped. Pre-filter hit → True
-    without a call; otherwise one gpt-4o-mini call, cached per (query,
-    options). Any failure → True: withhold nothing."""
-    if prefilter_protected(query):
-        stats["scope_prefilter"] += 1
-        return True
+    """True when the question needs the replaced value (past value, change,
+    first/initial value) or is time-scoped: one gpt-4o-mini call, cached per
+    (query, options), in any language. Any failure → True: withhold nothing."""
     key = (query, tuple(str(o) for o in options or ()))
     with _scope_lock:
         if key in _scope_cache:
@@ -153,56 +126,26 @@ def question_protected(query: str, options: list[str] | None) -> bool:
 
 
 # --- Add ----------------------------------------------------------------------
-# --- render language check (round 3) -------------------------------------------
-_SCRIPTS = (("cjk", re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")),
-            ("cyrillic", re.compile(r"[\u0400-\u04ff]")), ("arabic", re.compile(r"[\u0600-\u06ff]")),
-            ("latin", re.compile(r"[A-Za-z\u00c0-\u024f]")))
-_STOPWORDS = {
-    "en": {"the", "is", "are", "of", "and", "to", "in", "my", "i", "was", "it", "with", "for", "this", "that", "has", "have", "now"},
-    "es": {"el", "la", "los", "las", "es", "de", "y", "mi", "en", "un", "una", "que", "se", "con", "por", "del", "al"},
-    "fr": {"le", "la", "les", "est", "de", "et", "mon", "ma", "un", "une", "des", "du", "en", "sont", "que", "dans"},
-    "de": {"der", "die", "das", "ist", "und", "mein", "meine", "ein", "eine", "ich", "nicht", "zu", "mit", "von", "im"},
-    "pt": {"o", "a", "os", "as", "é", "de", "e", "meu", "minha", "um", "uma", "do", "da", "em", "que", "não"},
-    "it": {"il", "lo", "la", "è", "di", "e", "mio", "mia", "un", "una", "del", "della", "che", "non", "sono"},
-}
-
-
-def _script(text: str) -> str | None:
-    counts = {name: len(pattern.findall(text)) for name, pattern in _SCRIPTS}
-    best = max(counts, key=counts.get)
-    return best if counts[best] else None
-
-
-def _latin_language(text: str) -> str | None:
-    words = re.findall(r"[a-zà-ÿ']+", text.lower())
-    hits = {lang: sum(w in stop for w in words) for lang, stop in _STOPWORDS.items()}
-    best = max(hits, key=hits.get)
-    ranked = sorted(hits.values(), reverse=True)
-    return best if ranked[0] >= 2 and ranked[0] > ranked[1] else None
-
-
-def same_language(sentence: str, source: str) -> bool:
-    """False only when the two texts clearly differ: another script, or both
-    Latin with a clear and different stopword language. A cheap heuristic for
-    RENDER, which must not store a sentence translated away from the user's."""
-    a, b = _script(sentence), _script(STAMP.sub("", source, count=1))
-    if a and b and a != b:
-        return False
-    if a == b == "latin":
-        la, lb = _latin_language(sentence), _latin_language(STAMP.sub("", source, count=1))
-        if la and lb and la != lb:
-            return False
-    return True
+def _language(tag) -> str | None:
+    """A model-written language tag reduced to its primary subtag ("zh-Hans" -> "zh")."""
+    if not isinstance(tag, str) or not tag.strip():
+        return None
+    return tag.strip().lower().replace("_", "-").split("-", 1)[0]
 
 
 def renderable(record: dict, update_turn: str) -> bool:
     """RENDER stores the current-value sentence only for an absolute record
-    whose sentence is in the language of the user's turn."""
+    whose sentence is in the language of the user's statement. rc5: stage 2
+    tags the quoted statement's language and the sentence's language; a
+    missing tag or two different tags means no render (the turn and the facts
+    are stored as always). *update_turn* is kept for the call signature."""
     if record["relative"] or not record.get("statement"):
         return False
-    if config.UPDATE_VERSION >= 3 and not same_language(record["statement"], update_turn):
-        stats["render_language_fallback"] += 1
-        return False
+    if config.UPDATE_VERSION >= 3:
+        source, written = _language(record.get("statement_language")), _language(record.get("current_language"))
+        if source is None or written is None or source != written:
+            stats["render_language_fallback"] += 1
+            return False
     return True
 
 
@@ -230,8 +173,8 @@ def _text(value, limit: int = 200) -> str | None:
 def parse_updates(entries: list[dict], raw_items: list[store.Item]) -> list[dict]:
     """Validated records. An entry is dropped unless it points at a user turn
     that contains its new value verbatim; an old value the turn does not
-    contain is discarded as a guess. An entry carrying "quote" (round 2) has
-    the relative check applied to that quote instead of the whole turn."""
+    contain is discarded as a guess. "relative" is the model's flag (or a
+    signed number as the new value)."""
     records = []
     for number, entry in enumerate(entries):
         try:
@@ -252,10 +195,8 @@ def parse_updates(entries: list[dict], raw_items: list[store.Item]) -> list[dict
         if old and (not mentions(item.content, old) or _norm(old) == _norm(new)):
             old = None
         flag = entry.get("relative")
-        span = entry.get("quote") or STAMP.sub("", item.content, count=1)
         relative = (flag is True or (isinstance(flag, str) and flag.strip().lower() == "true")
-                    or bool(RELATIVE_SIGN.match(new)) or bool(RELATIVE_WORDS.search(new))
-                    or bool(RELATIVE_WORDS.search(span)))
+                    or bool(RELATIVE_SIGN.match(new)))
         records.append({
             "id": f"{item.id}-u{number}", "item_id": item.id, "subject": subject,
             "attribute": attribute, "new_value": new, "old_value": old, "relative": relative,
@@ -264,6 +205,8 @@ def parse_updates(entries: list[dict], raw_items: list[store.Item]) -> list[dict
             # user's turns and drops the subject-mention requirement.
             "subject_is_user": own_flag if config.UPDATE_VERSION >= 6 else False,
             "statement": _text(entry.get("statement"), 400), "created_at": item.created_at,
+            "statement_language": _text(entry.get("statement_language"), 20),
+            "current_language": _text(entry.get("current_language"), 20),
         })
     return records
 
@@ -271,7 +214,7 @@ def parse_updates(entries: list[dict], raw_items: list[store.Item]) -> list[dict
 ACCEPTED_INTENTS = {"EXPLICIT_REPLACEMENT", "CORRECTION"}
 # Round-2 call accounting, read by the bench (and /health is untouched).
 stats = {"chunks": 0, "stage1": 0, "accepted": 0, "stage2": 0, "records": 0, "render_language_fallback": 0,
-         "scope_prefilter": 0, "scope_calls": 0, "scope_failures": 0, "scope_seconds": 0.0}
+         "scope_calls": 0, "scope_failures": 0, "scope_seconds": 0.0}
 
 
 def _ws(text: str) -> str:
@@ -385,7 +328,7 @@ def candidates(index: store.UserIndex, record: dict) -> list[int]:
     update_row = index.by_id.get(record["item_id"])
     if update_row is None or index.matrix is None:
         return []
-    self_text = _norm(record["subject"]) in SELF
+    self_text = _norm(record["subject"]) in USER_MARKERS
     own = self_text or (config.UPDATE_VERSION >= 6 and bool(record.get("subject_is_user")))
     # Version 7: the flag only narrows candidates to the user's turns; the
     # subject must still be mentioned unless the subject text is the user
@@ -481,9 +424,9 @@ def _chunk_facts(index: store.UserIndex, user_id: str, records: list[dict],
         update_row = index.by_id.get(record["item_id"])
         if update_row is None:
             continue
-        own = _norm(record["subject"]) in SELF or (config.UPDATE_VERSION >= 6 and bool(record.get("subject_is_user")))
+        own = _norm(record["subject"]) in USER_MARKERS or (config.UPDATE_VERSION >= 6 and bool(record.get("subject_is_user")))
         if config.UPDATE_VERSION >= 7:
-            own = _norm(record["subject"]) in SELF  # only the subject text waives the mention (see candidates())
+            own = _norm(record["subject"]) in USER_MARKERS  # only the subject text waives the mention (see candidates())
         confirmed = [(item_id, quote) for (update_id, item_id), (replaced, quote) in list(checks.items())
                      if update_id == record["id"] and replaced and item_id.rsplit("-", 1)[1].startswith("r")]
         for raw_id, quote in confirmed:
@@ -520,11 +463,9 @@ def _lock(user_id: str) -> threading.Lock:
 
 
 def withheld(index: store.UserIndex, user_id: str, query: str) -> set[str]:
-    """Item ids to leave out of this search's returned set. Version 5 applies
-    only the pre-filter here; main._search asks question_protected() when the
-    result would actually change."""
-    if (prefilter_protected(query) if config.UPDATE_VERSION >= 5 else protected_question(query)):
-        return set()
+    """Item ids the explicit updates replaced. The question is not read here:
+    main._search asks question_protected() when withholding them would
+    actually change the returned set (rc5: for every version)."""
     records = [r for r in store.get_updates(user_id) if not r["relative"]]
     if not records:
         return set()

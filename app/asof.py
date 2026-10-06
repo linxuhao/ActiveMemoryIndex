@@ -1,4 +1,4 @@
-"""As-of evidence selection (AMI_ASOF_SELECT, lead L1).
+"""As-of evidence selection (AMI_ASOF_SELECT).
 
 A question that asks for the state of something at a stated date ("What was
 Maya's job title as of September 5, 2025?", "截至2024年1月，他住在哪里？") is
@@ -8,33 +8,39 @@ question, items that were not valid at that date are left out of the returned
 set and the freed slots are refilled from the ranking. Membership only:
 nothing is rewritten, nothing is computed for the reader, no answer is given.
 
-Two rules, over the candidates the ranking puts near the top:
-  (a) interval: an item stating explicit date ranges, none of which overlaps
-      the as-of period, is withheld when some returned item states a range
-      that does;
-  (b) said after: an item said (its stamp) after the end of the as-of period
-      whose text names no year is withheld when some returned item was said
-      on or before it -- unless it uses relative-time wording ("yesterday",
-      "上周", "ayer") and was said within AMI_ASOF_GRACE_DAYS of the period,
-      because "yesterday I came back from San Francisco" said the day after
-      describes the day itself.
+No language-dependent pattern decides anything here (rc5). gpt-4o-mini reads
+the language:
 
-Who decides. A cheap, language-neutral gate first: the question must contain a
-year written in digits. A multilingual date parser (ISO, English and five
-other European month names, CJK and Korean year-month-day) gives a candidate
-period, and the rules are tried. Only when they would change the returned set
-is gpt-4o-mini asked (one call per distinct question, cached) whether the
-question asks for a state as of that time, an event on that date, or neither,
-and for the date itself, normalised from any language. Rule (b) is applied
-only to state questions; rule (a) to state and event questions; nothing to
-the rest. The router's date replaces the parser's when it gives one, so a
-format the parser does not know still works once something would change.
-The relative-time word list only ever keeps items (adds protection).
+  * question side -- one call per distinct (query, options), started beside
+    the recall-question rewrite so it adds no latency, cached: is this an
+    as-of state question, an event-on-a-date question or neither, and which
+    period (ISO start and end) does it name, in any language and any way of
+    writing a date;
+  * item side -- only for an as-of state question with a period: one call
+    over the candidates (the items the Search would return, then the next
+    ranked ones that could refill a withheld slot), each sent with the date
+    it was said (our own stamp) and its text. The model lists the items that
+    state the asked thing as valid during the period, those that state a
+    value of it that is not valid during the period, and those said after the
+    period that are nonetheless about the period (a date, a span, or a
+    relative reference such as "yesterday" in any language).
+
+Then, over the judged items only:
+  (a) an item stating a value that is not valid during the period is withheld
+      when some judged item states one that is;
+  (b) an item said (stamp) after the end of the period that is neither valid
+      during it nor about it is withheld when some returned item was said by
+      the end of the period.
+An event question withholds nothing (rc4's interval rule changed no event
+question's list in any rc4 set). Unjudged items are never withheld, and any
+failure withholds nothing.
 """
 from __future__ import annotations
 
 import calendar
 import collections
+import concurrent.futures
+import contextvars
 import datetime as dt
 import json
 import logging
@@ -47,56 +53,9 @@ log = logging.getLogger("ami.asof")
 
 Period = tuple[dt.date, dt.date]
 
-YEAR = r"(1[0-9]{3}|20[0-9]{2})"
-_MONTHS = {
-    # English
-    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6, "july": 7, "august": 8,
-    "september": 9, "october": 10, "november": 11, "december": 12,
-    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6, "jul": 7, "aug": 8, "sep": 9, "sept": 9, "oct": 10,
-    "nov": 11, "dec": 12,
-    # Spanish
-    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
-    "septiembre": 9, "setiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
-    # French
-    "janvier": 1, "février": 2, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5, "juin": 6, "juillet": 7,
-    "août": 8, "aout": 8, "septembre": 9, "octobre": 10, "novembre": 11, "décembre": 12, "decembre": 12,
-    # German
-    "januar": 1, "jänner": 1, "februar": 2, "märz": 3, "maerz": 3, "juni": 6, "juli": 7, "oktober": 10,
-    "dezember": 12,
-    # Portuguese
-    "janeiro": 1, "fevereiro": 2, "março": 3, "marco": 3, "maio": 5, "junho": 6, "julho": 7, "setembro": 9,
-    "outubro": 10, "novembro": 11, "dezembro": 12,
-    # Italian
-    "gennaio": 1, "febbraio": 2, "aprile": 4, "maggio": 5, "giugno": 6, "luglio": 7, "settembre": 9,
-    "ottobre": 10, "dicembre": 12,
-}
-MON = "(" + "|".join(sorted((re.escape(m) for m in _MONTHS), key=len, reverse=True)) + r")\.?"
-_OF = r"(?:\s+(?:of|de|del|di)\s+|\s*,\s*|\.\s*|\s+)"
-
-# Most specific first; a later pattern never claims text an earlier one took.
-PATTERNS = [
-    ("ymd", re.compile(rf"(?<!\d){YEAR}[-/.](\d{{1,2}})[-/.](\d{{1,2}})(?!\d)")),
-    ("cjk_ymd", re.compile(rf"{YEAR}\s*[年년]\s*(\d{{1,2}})\s*[月월]\s*(\d{{1,2}})\s*[日号號일]?")),
-    ("cjk_ym", re.compile(rf"{YEAR}\s*[年년]\s*(\d{{1,2}})\s*[月월]")),
-    ("dmy_dots", re.compile(rf"(?<![\d.])(\d{{1,2}})\.(\d{{1,2}})\.{YEAR}(?!\d)")),
-    ("mdy", re.compile(rf"(?<![\w]){MON}\s+(\d{{1,2}})(?:st|nd|rd|th)?,?\s+{YEAR}(?!\d)", re.I)),
-    ("dmy", re.compile(rf"(?<![\w.])(\d{{1,2}})(?:st|nd|rd|th|er|º|\.)?(?:\s+de|\s+of)?\s+{MON}{_OF}{YEAR}(?!\d)", re.I)),
-    ("my", re.compile(rf"(?<![\w]){MON}{_OF}{YEAR}(?!\d)", re.I)),
-    ("cjk_y", re.compile(rf"{YEAR}\s*[年년]")),
-    ("y", re.compile(rf"(?<![\d.,/:-]){YEAR}(?![\d/:]|\s*[年년])")),
-]
-ANY_YEAR = re.compile(rf"(?<!\d){YEAR}(?!\d)")
+# Our own stamp format ("[YYYY-MM-DD HH:MM] ", or the "[said ...]" re-render).
 STAMP = re.compile(r"^\[(?:said )?(\d{4})-(\d{2})-(\d{2})[^\]]*\]\s*")
-RANGE_JOIN = re.compile(r"^\s*(?:,\s*)?(?:to|until|till|through|thru|and|[-–—~]|到|至|～|a|al|hasta|au|jusqu'?au|bis)\s*$",
-                        re.I)
-RANGE_OPEN = re.compile(r"(?:from|between|从|自|desde|entre|de|du|von)\s*$", re.I)
-# Relative-time wording: may only KEEP an item (protection), never withhold one.
-RELATIVE = re.compile(
-    r"\b(?:yesterday|last (?:night|week|weekend|month|year|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|"
-    r"the other day|(?:a few|two|three|couple of) (?:days|weeks) ago|days? ago|weeks? ago|recently|earlier this "
-    r"(?:week|month)|ayer|la semana pasada|el mes pasado|hier|la semaine derni[eè]re|le mois dernier|gestern|"
-    r"letzte woche|letzten monat|ontem|semana passada|ieri|la settimana scorsa)\b"
-    r"|昨天|前天|上周|上星期|上个月|上個月|前几天|前幾天|最近|昨日|先週|先月|어제|지난주|지난달", re.I)
+KINDS = ("as_of_state", "event_on_date", "other")
 
 
 def _span(year: int, month: int | None = None, day: int | None = None) -> Period | None:
@@ -110,53 +69,8 @@ def _span(year: int, month: int | None = None, day: int | None = None) -> Period
         return None
 
 
-def _month(name: str) -> int:
-    return _MONTHS[name.lower().rstrip(".")]
-
-
-def dates(text: str) -> list[tuple[int, int, Period]]:
-    """Date expressions carrying a year, as (start, end, period), in text order."""
-    found: list[tuple[int, int, Period]] = []
-    taken: list[tuple[int, int]] = []
-    for kind, pattern in PATTERNS:
-        for match in pattern.finditer(text):
-            a, b = match.span()
-            if any(a < y and x < b for x, y in taken):
-                continue
-            g = match.groups()
-            try:
-                if kind in ("ymd", "cjk_ymd"):
-                    span = _span(int(g[0]), int(g[1]), int(g[2]))
-                elif kind == "cjk_ym":
-                    span = _span(int(g[0]), int(g[1]))
-                elif kind == "dmy_dots":
-                    span = _span(int(g[2]), int(g[1]), int(g[0]))
-                elif kind == "mdy":
-                    span = _span(int(g[2]), _month(g[0]), int(g[1]))
-                elif kind == "dmy":
-                    span = _span(int(g[2]), _month(g[1]), int(g[0]))
-                elif kind == "my":
-                    span = _span(int(g[1]), _month(g[0]))
-                else:
-                    span = _span(int(g[0]))
-            except (KeyError, ValueError):
-                span = None
-            if span:
-                found.append((a, b, span))
-                taken.append((a, b))
-    return sorted(found)
-
-
-def candidate(query: str) -> Period | None:
-    """The first dated period the question names, or None (no year in digits)."""
-    if not ANY_YEAR.search(query or ""):
-        return None
-    found = dates(query)
-    return found[0][2] if found else None
-
-
 def parse_iso(value) -> Period | None:
-    """'YYYY', 'YYYY-MM' or 'YYYY-MM-DD' (the router's format) -> period."""
+    """'YYYY', 'YYYY-MM' or 'YYYY-MM-DD' (the model's format) -> the span it covers."""
     if not isinstance(value, str):
         return None
     match = re.fullmatch(r"\s*(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?\s*", value)
@@ -164,19 +78,6 @@ def parse_iso(value) -> Period | None:
         return None
     year, month, day = match.groups()
     return _span(int(year), int(month) if month else None, int(day) if day else None)
-
-
-def ranges(text: str) -> list[Period]:
-    """Explicit date ranges: 'from X to Y', 'between X and Y', 'X - Y', '从X到Y', 'X至Y'."""
-    found = dates(text)
-    out = []
-    for (a1, b1, s1), (a2, _, s2) in zip(found, found[1:]):
-        joiner = text[b1:a2]
-        if RANGE_JOIN.match(joiner):
-            if joiner.strip().lower() in ("and", "a", "al") and not RANGE_OPEN.search(text[max(0, a1 - 12):a1]):
-                continue  # "X and Y" is a range only after "between"
-            out.append((s1[0], s2[1]))
-    return out
 
 
 def said(content: str) -> tuple[dt.date | None, str]:
@@ -191,52 +92,7 @@ def said(content: str) -> tuple[dt.date | None, str]:
     return day, content[match.end():]
 
 
-def combine(parsed: Period, routed: Period | None) -> Period:
-    """The period to apply. The router normalises any language, but tends to
-    write a month as its first day ("August 2025" -> "2025-08-01"), so it may
-    not narrow a period the parser read at month or day precision. It decides
-    when the parser found only a year, or when the two disagree."""
-    if routed is None:
-        return parsed
-    year_only = parsed == _span(parsed[0].year)
-    inside = parsed[0] <= routed[0] and routed[1] <= parsed[1]
-    return parsed if inside and not year_only else routed
-
-
-def overlaps(a: Period, b: Period) -> bool:
-    return a[0] <= b[1] and a[1] >= b[0]
-
-
-def withhold(period: Period, pool: list[store.Item], returned: list[store.Item],
-             state: bool) -> set[str]:
-    """Ids among *pool* not valid at *period*. The conditions ("some returned
-    item states an overlapping range", "some returned item was said by the
-    end of the period") are read from *returned*, the set as it would be
-    returned without this rule. Rule (b) only when *state*."""
-    parsed = {}
-
-    def info(item):
-        if item.id not in parsed:
-            when, body = said(item.content)
-            parsed[item.id] = (when, body, ranges(body))
-        return parsed[item.id]
-
-    any_valid_range = any(any(overlaps(r, period) for r in info(item)[2]) for item in returned)
-    any_early = any(info(item)[0] is not None and info(item)[0] <= period[1] for item in returned)
-    grace = dt.timedelta(days=max(0, config.ASOF_GRACE_DAYS))
-    out = set()
-    for item in pool:
-        when, body, spans = info(item)
-        if any_valid_range and spans and not any(overlaps(r, period) for r in spans):
-            out.add(item.id)
-            continue
-        if (state and any_early and when is not None and when > period[1] and not ANY_YEAR.search(body)
-                and not (RELATIVE.search(body) and when <= period[1] + grace)):
-            out.add(item.id)
-    return out
-
-
-_DELIVERED = re.compile(r"(.+)-(?:c0|s(\d+)-(\d+))$")
+_DELIVERED = re.compile(r"(.+)-(?:c0|s(\d+)-(\d+))$")  # our own chunk / span ids
 
 
 def constituents(index: store.UserIndex, item: store.Item) -> list[store.Item]:
@@ -255,84 +111,178 @@ def constituents(index: store.UserIndex, item: store.Item) -> list[store.Item]:
     return [index.items[row] for row in rows] or [item]
 
 
-# --- router ---------------------------------------------------------------------
+# --- question side ---------------------------------------------------------------
 stats = collections.Counter()
-_cache: "collections.OrderedDict[tuple, dict | None]" = collections.OrderedDict()
+_cache: "collections.OrderedDict[tuple, dict]" = collections.OrderedDict()
+_item_cache: "collections.OrderedDict[tuple, dict]" = collections.OrderedDict()
 _cache_lock = threading.Lock()
 CACHE_MAX = 10_000
+_executor = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, config.LLM_CONCURRENCY),
+                                                  thread_name_prefix="asof")
+
+
+def parse_verdict(payload: dict | None) -> dict | None:
+    """{"kind", "period": (start, end) | None}, or None for an unusable reply.
+    A state or event question without a usable period is "other"."""
+    if not isinstance(payload, dict) or payload.get("kind") not in KINDS:
+        return None
+    start, end = parse_iso(payload.get("start")), parse_iso(payload.get("end"))
+    if start and not end:
+        end = start
+    if end and not start:
+        start = end
+    period = (start[0], end[1]) if start and end and start[0] <= end[1] else None
+    kind = payload["kind"] if period else "other"
+    return {"kind": kind, "period": period if kind != "other" else None}
+
+
+def _remember(cache: collections.OrderedDict, key: tuple, value: dict) -> None:
+    with _cache_lock:
+        cache[key] = value
+        while len(cache) > CACHE_MAX:
+            cache.popitem(last=False)
 
 
 def classify(query: str, options: list[str] | None) -> dict | None:
-    """{"kind": "as_of_state" | "event" | "other", "as_of": period | None}, or
-    None when the call failed (the caller then withholds nothing)."""
+    """The question's verdict, or None when the call failed (the caller then
+    withholds nothing; a failure is not cached)."""
     key = (query, tuple(str(o) for o in options or ()))
     with _cache_lock:
         if key in _cache:
             _cache.move_to_end(key)
+            stats["classify_cached"] += 1
             return _cache[key]
-    stats["router_calls"] += 1
-    verdict = parse_verdict(llm.classify_asof(query, options))
+    stats["classify_calls"] += 1
+    try:
+        verdict = parse_verdict(llm.classify_asof(query, options))
+    except Exception:  # noqa: BLE001 - a failed classification withholds nothing
+        log.exception("as-of classification failed")
+        verdict = None
     if verdict is None:
-        stats["router_failures"] += 1
+        stats["classify_failures"] += 1
         return None
-    with _cache_lock:
-        _cache[key] = verdict
-        while len(_cache) > CACHE_MAX:
-            _cache.popitem(last=False)
+    stats[f"kind_{verdict['kind']}"] += 1
+    _remember(_cache, key, verdict)
     return verdict
 
 
-def select_withheld(index: store.UserIndex, scores, query: str, options: list[str] | None,
-                    returned: list[store.Item]) -> set[str]:
-    """Item ids to leave out of this Search for its as-of date. Empty unless the
-    question names a dated period, the rules would change *returned*, and the
-    router says the question is about that time."""
-    period = candidate(query)
-    if period is None:
-        return set()
-    stats["dated_questions"] += 1
-    import numpy as np  # local: keeps this module importable without numpy for tools
+def start_classify(query: str, options: list[str] | None) -> concurrent.futures.Future:
+    """classify() beside the recall-question rewrite; the Search's context (its
+    deadline) goes with it."""
+    return _executor.submit(contextvars.copy_context().run, classify, query, options)
 
-    order = np.argsort(-scores)[: max(config.ASOF_POOL, 1)]
-    rows = {int(row) for row in order if np.isfinite(scores[int(row)])}
-    # The returned set also carries window neighbours that may rank far lower.
-    for item in returned:
-        row = index.by_id.get(item.id)
-        if row is not None:
-            rows.add(row)
-    pool = [index.items[row] for row in sorted(rows)]
-    returned_ids = {item.id for item in returned}
-    trial = withhold(period, pool, returned, state=True)
-    if not trial & returned_ids:
-        return set()
-    stats["would_change"] += 1
+
+def result(future: concurrent.futures.Future | None) -> dict | None:
+    if future is None:
+        return None
     try:
-        verdict = classify(query, options)
-    except Exception:  # noqa: BLE001 - a failed router withholds nothing
+        return future.result()
+    except Exception:  # noqa: BLE001 - includes a deadline: withhold nothing
         log.exception("as-of classification failed")
-        verdict = None
-    if verdict is None or verdict["kind"] == "other":
-        return set()
-    period = combine(period, verdict.get("as_of"))
-    out = withhold(period, pool, returned, state=verdict["kind"] == "as_of_state")
-    stats["applied"] += bool(out & returned_ids)
-    stats["withheld"] += len(out & returned_ids)
+        return None
+
+
+# --- item side -------------------------------------------------------------------
+def judge(query: str, options: list[str] | None, period: Period,
+          items: list[store.Item]) -> dict[str, set[str]] | None:
+    """{"valid", "not_valid", "about"} -> item ids, or None on failure."""
+    key = (query, tuple(str(o) for o in options or ()), period, tuple(item.id for item in items))
+    with _cache_lock:
+        if key in _item_cache:
+            _item_cache.move_to_end(key)
+            return _item_cache[key]
+    lines = []
+    for number, item in enumerate(items):
+        when, body = said(item.content)
+        text = " ".join(body.split())
+        if len(text) > config.ASOF_ITEM_CHARS:
+            text = text[: config.ASOF_ITEM_CHARS] + " ..."
+        lines.append(f"{number} | said {when.isoformat() if when else 'unknown'} | {text}")
+    stats["judge_calls"] += 1
+    stats["judge_items"] += len(items)
+    try:
+        payload = llm.judge_asof_items(query, options, period, "\n".join(lines))
+    except Exception:  # noqa: BLE001
+        log.exception("as-of item judgement failed")
+        payload = None
+    names = ("valid", "not_valid", "about_period")
+    if not isinstance(payload, dict) or not all(isinstance(payload.get(name), list) for name in names):
+        stats["judge_failures"] += 1  # all three lists or nothing: a partial reply would withhold by default
+        return None
+    out: dict[str, set[str]] = {}
+    for name in names:
+        picked = set()
+        for value in payload[name]:
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= number < len(items):
+                picked.add(items[number].id)
+        out["about" if name == "about_period" else name] = picked
+    _remember(_item_cache, key, out)
     return out
 
 
-def parse_verdict(payload: dict | None) -> dict | None:
-    if not isinstance(payload, dict):
-        return None
-    kind = payload.get("kind")
-    if kind not in ("as_of_state", "event", "other"):
-        return None
-    return {"kind": kind, "as_of": parse_iso(payload.get("as_of"))}
+def withhold(period: Period, judged: list[store.Item], returned: list[store.Item],
+             verdicts: dict[str, set[str]]) -> set[str]:
+    """Ids among *judged* to leave out, by rules (a) and (b) of the module doc."""
+    valid, not_valid, about = verdicts["valid"], verdicts["not_valid"], verdicts["about"]
+    any_early = any((when := said(item.content)[0]) is not None and when <= period[1] for item in returned)
+    out = set()
+    for item in judged:
+        if item.id in valid:
+            continue
+        if item.id in not_valid and valid:
+            out.add(item.id)
+            continue
+        when = said(item.content)[0]
+        if any_early and when is not None and when > period[1] and item.id not in about:
+            out.add(item.id)
+    return out
+
+
+def select_withheld(index: store.UserIndex, scores, query: str, options: list[str] | None,
+                    verdict: dict | None, returned: list[store.Item]) -> set[str]:
+    """Item ids to leave out of this Search for its as-of period. Empty unless
+    *verdict* is an as-of state question with a period."""
+    if not verdict or verdict["kind"] != "as_of_state" or not verdict["period"]:
+        return set()
+    period = verdict["period"]
+    stats["state_questions"] += 1
+    import numpy as np  # local: keeps this module importable without numpy for tools
+
+    limit = max(1, config.ASOF_ITEMS)
+    rows: list[int] = []
+    seen: set[int] = set()
+    # What the Search would return first (by score), then the next ranked items
+    # that could refill a withheld slot.
+    first = sorted({index.by_id[item.id] for item in returned if item.id in index.by_id},
+                   key=lambda row: -float(scores[row]))
+    for row in first + [int(r) for r in np.argsort(-scores)]:
+        if len(rows) >= limit:
+            break
+        if row in seen or not np.isfinite(scores[row]):
+            continue
+        seen.add(row)
+        rows.append(row)
+    judged = [index.items[row] for row in rows]
+    if not judged:
+        return set()
+    verdicts = judge(query, options, period, judged)
+    if verdicts is None:
+        return set()
+    out = withhold(period, judged, returned, verdicts)
+    returned_ids = {item.id for item in returned}
+    stats["applied"] += bool(out & returned_ids)
+    stats["withheld"] += len(out & returned_ids)
+    return out
 
 
 def dumps(verdict: dict | None) -> str:
     """For logs: periods as ISO strings."""
     if verdict is None:
         return "null"
-    period = verdict.get("as_of")
+    period = verdict.get("period")
     return json.dumps({"kind": verdict["kind"],
-                       "as_of": [period[0].isoformat(), period[1].isoformat()] if period else None})
+                       "period": [period[0].isoformat(), period[1].isoformat()] if period else None})

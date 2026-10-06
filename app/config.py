@@ -223,11 +223,11 @@ CHUNK_MEMORY = _env("AMI_CHUNK_MEMORY", "0") != "0"
 # AMI_ADAPTIVE_CHUNK characters; otherwise as the turn and its neighbours within
 # AMI_WINDOW_RADIUS, added while the span stays within that size, overlapping or
 # touching spans of one chunk merged into one memory. Facts are delivered as
-# they are. The returned text is capped at AMI_ADAPTIVE_CHUNK_TOTAL characters
-# (and always by the token budget). A turn withheld by an update or as-of rule is
+# they are. Bounded like every other mode: top_k, AMI_RETURN_CHAR_BUDGET and the
+# token budget of app/tokens.py (rc5 removed the separate 120,000-character
+# AMI_ADAPTIVE_CHUNK_TOTAL cap). A turn withheld by an update or as-of rule is
 # left out of the chunk or span text. Nothing is rewritten. 0 = off.
 ADAPTIVE_CHUNK = _int("AMI_ADAPTIVE_CHUNK", 0)
-ADAPTIVE_CHUNK_TOTAL = _int("AMI_ADAPTIVE_CHUNK_TOTAL", 120_000)
 
 # Ask the model when each returned memory's event actually happened, then do
 # the arithmetic in code.
@@ -340,20 +340,20 @@ UPDATE_VERSION = _int("AMI_UPDATE_VERSION", 7)
 LLM_MAX_TOKENS_INTENT = _int("AMI_LLM_MAX_TOKENS_INTENT", 500)
 
 # As-of evidence selection (lead L1, app/asof.py,
-# bench/results/asof_selection_preregistration.md). For a question that asks
-# for a state at a stated date, returned items not valid at that date (an
-# explicit date range that misses it; said after it without naming a year) are
-# withheld and their slots refilled from the ranking. gpt-4o-mini decides
-# whether the question is such a question, one call per distinct question,
-# only when the rules would change the returned set. Membership only. Off.
+# bench/results/asof_selection_preregistration.md; rc5: no language-dependent
+# patterns, bench/results/rc5_language_neutral_preregistration.md). For a
+# question that asks for a state at a stated date, returned items not valid at
+# that date are withheld and their slots refilled from the ranking.
+# gpt-4o-mini classifies every Search question (one call per distinct question,
+# beside the recall rewrite, cached) and, for an as-of state question, judges
+# the candidates in one call. Membership only. Off.
 ASOF_SELECT = _env("AMI_ASOF_SELECT", "0") != "0"
-# Candidates the rules are applied to: the top of the ranking plus whatever
-# the returned set carries (window neighbours).
-ASOF_POOL = _int("AMI_ASOF_POOL", 400)
-# An item said up to this many days after the as-of period that uses
-# relative-time wording ("yesterday", "上周") is kept: it describes the period.
-ASOF_GRACE_DAYS = _int("AMI_ASOF_GRACE_DAYS", 31)
+# Candidates the item-side call judges: what the Search would return, then the
+# next ranked items (refill), at most this many, each cut to this many characters.
+ASOF_ITEMS = _int("AMI_ASOF_ITEMS", 200)
+ASOF_ITEM_CHARS = _int("AMI_ASOF_ITEM_CHARS", 300)
 LLM_MAX_TOKENS_ASOF = _int("AMI_LLM_MAX_TOKENS_ASOF", 80)
+LLM_MAX_TOKENS_ASOF_ITEMS = _int("AMI_LLM_MAX_TOKENS_ASOF_ITEMS", 800)
 
 # --- direct corpus interaction ------------------------------------------------
 # Replace the embedding selection with a gpt-4o-mini agent that greps and reads

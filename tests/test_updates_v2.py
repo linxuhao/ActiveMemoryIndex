@@ -79,14 +79,14 @@ check(updates.detect([raw(0, "Hi there.", digest="b" * 16)]) == [] and calls == 
       "no accepted statement: no stage-2 call, no record")
 llm.classify_update_intent = lambda numbered: None
 check(updates.detect_or_none(turns) is None and updates.detect(turns) == [], "a failed stage-1 call is None, Add sees []")
-rel = updates.parse_updates([{"turn": 0, "subject": "me", "attribute": "coins", "new_value": "38",
+rel = updates.parse_updates([{"turn": 0, "subject": "me", "attribute": "coins", "new_value": "38", "relative": True,
                               "quote": "I added one more coin, so 38"}],
                             [raw(0, "Big week. I added one more coin, so 38 now. More news later!")])
 plain = updates.parse_updates([{"turn": 0, "subject": "me", "attribute": "gym time", "new_value": "6 pm",
                                 "quote": "Update my gym time: it's 6 pm"}],
                               [raw(0, "Update my gym time: it's 6 pm. I'd love more tips on stretching.")])
 check(rel[0]["relative"] and not plain[0]["relative"],
-      "relative words are read in the quote, not in the rest of the turn")
+      "rc5: relative is stage 2's flag; no word list reads the quote or the turn")
 llm.classify_update_intent, llm.extract_updates, config.LLM_API_KEY = saved_llm
 
 
@@ -144,12 +144,13 @@ def search(withhold):
 
 saved = (config.DB_PATH, config.AUTH_SCHEME, config.LLM_API_KEY, config.UPDATE_DETECT, config.UPDATE_RENDER,
          config.UPDATE_WITHHOLD, embed.encode, llm.extract_facts, llm.recall_question,
-         llm.classify_update_intent, llm.extract_updates, llm.verify_replaced_v2)
+         llm.classify_update_intent, llm.extract_updates, llm.verify_replaced_v2, llm.classify_question)
 config.AUTH_SCHEME, config.LLM_API_KEY = "none", "test-key"
 embed.encode = fake_vectors
 llm.extract_facts = lambda text: []
 llm.recall_question = lambda q, o: None
 llm.classify_update_intent, llm.extract_updates, llm.verify_replaced_v2 = fake_stage1, fake_stage2, verifier
+llm.classify_question = lambda q, o: {"needs_past_value": False, "time_scoped": False}  # rc5: every version asks
 try:
     with tempfile.TemporaryDirectory() as directory:
         build(directory, "plain", detect=False)
@@ -172,7 +173,7 @@ try:
 finally:
     (config.DB_PATH, config.AUTH_SCHEME, config.LLM_API_KEY, config.UPDATE_DETECT, config.UPDATE_RENDER,
      config.UPDATE_WITHHOLD, embed.encode, llm.extract_facts, llm.recall_question,
-     llm.classify_update_intent, llm.extract_updates, llm.verify_replaced_v2) = saved
+     llm.classify_update_intent, llm.extract_updates, llm.verify_replaced_v2, llm.classify_question) = saved
     store._conn = None
 
 print("\nOK" if ok else "\nFAILED")

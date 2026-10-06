@@ -1,5 +1,5 @@
 """Explicit updates, round 3 (AMI_UPDATE_VERSION=3): the same-language check
-before RENDER, and re-verification of the facts extracted from the chunk of a
+before RENDER (rc5: stage 2's language tags), and re-verification of the facts extracted from the chunk of a
 confirmed-replaced turn. LLM and embedder replaced; no network.
 Run: python tests/test_updates_v3.py
 """
@@ -24,23 +24,25 @@ def check(cond, label):
     ok &= bool(cond)
 
 
-# --- language check -------------------------------------------------------------
-turn = "[2023-05-10 10:50] I: The name of the dead victim, the samurai, is Takehiro, not Tajomaru."
-check(not updates.same_language("El samurái se llama Takehiro y es el de la historia.", turn),
-      "a Spanish sentence for an English turn is rejected")
-check(not updates.same_language("会议时间是下午三点。", turn), "a CJK sentence for a Latin-script turn is rejected")
-check(updates.same_language("The samurai's name is Takehiro.", turn), "an English sentence for an English turn passes")
-check(updates.same_language("会议时间是下午三点。", "I: 把会议时间改成下午三点。"), "Chinese for Chinese passes")
-check(updates.same_language("Rafael del Riego's country of citizenship is Ghana.",
-                            'I: UPDATE: replace the prior value of this subject and relation with the following fact. '
-                            '{"subject": "Rafael del Riego", "relation": "country of citizenship", "object": "Ghana"}'),
-      "a name containing 'del' does not make an English sentence Spanish")
-check(updates.same_language("Funk.", turn), "too little text to tell: rendered")
+# --- language check (rc5: stage 2's own language tags; no script or stopword heuristic) ---
+def rec(**kw):
+    return {"relative": False, "statement": "The samurai's name is Takehiro.", **kw}
+
+
+check(not hasattr(updates, "same_language") and not hasattr(updates, "_STOPWORDS") and not hasattr(updates, "_SCRIPTS"),
+      "no script or stopword heuristic is left")
+check(updates.renderable(rec(statement_language="en", current_language="en"), ""), "equal tags: rendered")
+check(updates.renderable(rec(statement_language="zh-Hans", current_language="ZH"), "")
+      and updates.renderable(rec(statement_language="pt_BR", current_language="pt"), ""),
+      "tags compare by primary subtag, in any case and with either separator")
 before = updates.stats["render_language_fallback"]
-check(not updates.renderable({"relative": False, "statement": "El tipo de interfaz es GigabitEthernet y es el nuevo."},
-                             "I: can you please replace FastEthernet with GigabitEthernet in the instructions?")
-      and updates.stats["render_language_fallback"] == before + 1, "renderable() skips it and counts the fallback")
-check(not updates.renderable({"relative": True, "statement": "I have 38 coins."}, "I: I added one more coin."),
+check(not updates.renderable(rec(statement="El samurái se llama Takehiro.", statement_language="en",
+                                 current_language="es"), "")
+      and updates.stats["render_language_fallback"] == before + 1,
+      "different tags (a translated sentence): no render, and the fallback is counted")
+check(not updates.renderable(rec(statement_language="fr"), "") and not updates.renderable(rec(), ""),
+      "a missing tag (or an older stage-2 reply without tags): no render")
+check(not updates.renderable(rec(relative=True, statement_language="en", current_language="en"), ""),
       "relative records are never rendered")
 
 
@@ -74,7 +76,7 @@ STREAM = [("r1", ['{"subject": "Santiago", "relation": "founded by", "object": "
                   '{"subject": "Santiago", "relation": "founded by", "object": "Roberto Marinho"}'])]
 saved = (config.DB_PATH, config.AUTH_SCHEME, config.LLM_API_KEY, config.UPDATE_DETECT, config.UPDATE_WITHHOLD,
          embed.encode, llm.extract_facts, llm.recall_question, llm.classify_update_intent, llm.extract_updates,
-         llm.verify_replaced_v2)
+         llm.verify_replaced_v2, llm.classify_question)
 config.AUTH_SCHEME, config.LLM_API_KEY = "none", "test-key"
 embed.encode = fake_vectors
 llm.extract_facts = lambda text: [f for k, f in FACTS.items() if k in text]
@@ -86,6 +88,7 @@ llm.extract_updates = lambda numbered, accepted: [
     {"statement": 0, "subject": "Santiago", "attribute": "founded by", "new_value": "Roberto Marinho",
      "old_value": None, "relative": False, "current": "Santiago was founded by Roberto Marinho."}]
 llm.verify_replaced_v2 = first_pass_only_raw
+llm.classify_question = lambda q, o: {"needs_past_value": False, "time_scoped": False}  # rc5: every version asks
 try:
     with tempfile.TemporaryDirectory() as directory:
         for version in (2, 3):
@@ -119,7 +122,7 @@ try:
 finally:
     (config.DB_PATH, config.AUTH_SCHEME, config.LLM_API_KEY, config.UPDATE_DETECT, config.UPDATE_WITHHOLD,
      embed.encode, llm.extract_facts, llm.recall_question, llm.classify_update_intent, llm.extract_updates,
-     llm.verify_replaced_v2) = saved
+     llm.verify_replaced_v2, llm.classify_question) = saved
     store._conn = None
 
 print("\nOK" if ok else "\nFAILED")

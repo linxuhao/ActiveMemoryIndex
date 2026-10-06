@@ -35,7 +35,7 @@ class AdaptiveChunkTests(unittest.TestCase):
         self.facts = [fact(SMALL, 0, "I like small chunks."), fact(LARGE, 0, "I like large chunks.")]
         self.items = self.small + self.large + self.other + self.facts
         self.index = build(self.items)
-        self.config = patch.multiple(config, ADAPTIVE_CHUNK=4000, ADAPTIVE_CHUNK_TOTAL=120_000, WINDOW_RADIUS=1,
+        self.config = patch.multiple(config, ADAPTIVE_CHUNK=4000, WINDOW_RADIUS=1,
                                      RETURN_LIMIT=100, RETURN_CHAR_BUDGET=400_000, RAW_FIRST=True,
                                      CHUNK_MEMORY=False, CHRONO_ORDER=False, NEWEST_FIRST=False)
         self.config.start()
@@ -97,11 +97,26 @@ class AdaptiveChunkTests(unittest.TestCase):
     def test_bounds_hold(self):
         ranked = [f"{LARGE}-r{n}" for n in range(0, 10, 3)] + [f"{OTHER}-r0", f"{SMALL}-r0"]
         self.assertLessEqual(len(main.select(self.index, self.scores(ranked), 2)), 2)
-        with patch.object(config, "ADAPTIVE_CHUNK_TOTAL", 2500):
+        with patch.object(config, "RETURN_CHAR_BUDGET", 2500):
             chosen = main.select(self.index, self.scores(ranked), 100)
             self.assertLessEqual(sum(len(i.content) for i, _ in chosen), 2500)
         chosen = main.select(self.index, self.scores(ranked), 100, token_budget=300)
         self.assertLessEqual(sum(tokens.item_cost(i.content) for i, _ in chosen), 300)
+
+    def test_no_separate_total_cap(self):
+        """rc5: no 120,000-character cap of its own; the general budgets bound it."""
+        self.assertFalse(hasattr(config, "ADAPTIVE_CHUNK_TOTAL"))
+        words = " ".join(f"word{k}" for k in range(150))
+        items = [turn(f"{n:016x}", p, f"chunk {n} turn {p} {words}") for n in range(60) for p in range(3)]
+        index = build(items)
+        scores = np.linspace(1.0, 0.5, len(items))
+        chosen = main.select(index, scores, 100)
+        delivered = sum(len(i.content) for i, _ in chosen)
+        self.assertEqual(len(chosen), 60, "every chunk fits: one memory each")
+        self.assertGreater(delivered, 120_000)
+        self.assertLessEqual(sum(tokens.item_cost(i.content) for i, _ in chosen), tokens.memory_budget())
+        chosen = main.select(index, scores, 100, token_budget=20_000)
+        self.assertLessEqual(sum(tokens.item_cost(i.content) for i, _ in chosen), 20_000)
 
     def test_turns_first_then_facts(self):
         chosen = main.select(self.index, self.scores([self.facts[0].id, f"{OTHER}-r1", self.facts[1].id]), 10)
