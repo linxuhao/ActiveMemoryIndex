@@ -9,7 +9,7 @@ set and the freed slots are refilled from the ranking. Membership only:
 nothing is rewritten, nothing is computed for the reader, no answer is given.
 
 No language-dependent pattern decides anything here (rc5). gpt-4o-mini reads
-the language:
+the language; code only compares ISO dates:
 
   * question side -- one call per distinct (query, options), started beside
     the recall-question rewrite so it adds no latency, cached: is this an
@@ -17,20 +17,21 @@ the language:
     period (ISO start and end) does it name, in any language and any way of
     writing a date;
   * item side -- only for an as-of state question with a period: one call
-    over the candidates (the items the Search would return, then the next
-    ranked ones that could refill a withheld slot), each sent with the date
-    it was said (our own stamp) and its text. The model lists the items that
-    state the asked thing as valid during the period, those that state a
-    value of it that is not valid during the period, and those said after the
-    period that are nonetheless about the period (a date, a span, or a
-    relative reference such as "yesterday" in any language).
+    over the candidates not seen before (the items the Search would return,
+    then the next ranked ones that could refill a withheld slot), each sent
+    with the date it was said (our own stamp) and its text. The model gives
+    every time the text states as ISO start and end -- including a time
+    relative to the day it was said ("yesterday", "上周", "ayer") -- and
+    whether it is a span something held over ("from X to Y"). Cached per item.
 
-Then, over the judged items only:
-  (a) an item stating a value that is not valid during the period is withheld
-      when some judged item states one that is;
-  (b) an item said (stamp) after the end of the period that is neither valid
-      during it nor about it is withheld when some returned item was said by
-      the end of the period.
+Then, as in rc4, over the judged items:
+  (a) interval: an item stating spans, none of which overlaps the period, is
+      withheld when some returned item states a span that does;
+  (b) said after: an item said (stamp) after the end of the period whose text
+      states no time that starts by the end of the period is withheld when
+      some returned item was said by the end of the period. A stated time that
+      does -- "in 2012", "yesterday" said the day after -- keeps it: the item
+      may describe the period. ("This morning", said after it, does not.)
 An event question withholds nothing (rc4's interval rule changed no event
 question's list in any rc4 set). Unjudged items are never withheld, and any
 failure withholds nothing.
@@ -114,7 +115,6 @@ def constituents(index: store.UserIndex, item: store.Item) -> list[store.Item]:
 # --- question side ---------------------------------------------------------------
 stats = collections.Counter()
 _cache: "collections.OrderedDict[tuple, dict]" = collections.OrderedDict()
-_item_cache: "collections.OrderedDict[tuple, dict]" = collections.OrderedDict()
 _cache_lock = threading.Lock()
 CACHE_MAX = 10_000
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, config.LLM_CONCURRENCY),
@@ -183,62 +183,84 @@ def result(future: concurrent.futures.Future | None) -> dict | None:
 
 
 # --- item side -------------------------------------------------------------------
-def judge(query: str, options: list[str] | None, period: Period,
-          items: list[store.Item]) -> dict[str, set[str]] | None:
-    """{"valid", "not_valid", "about"} -> item ids, or None on failure."""
-    key = (query, tuple(str(o) for o in options or ()), period, tuple(item.id for item in items))
+_times: "collections.OrderedDict[str, list[tuple[Period, bool]]]" = collections.OrderedDict()
+TIMES_MAX = 200_000
+
+
+def times(items: list[store.Item]) -> dict[str, list[tuple[Period, bool]]] | None:
+    """Item id -> the times its text states, [(period, span)] ([] = none), or
+    None when the call failed. One gpt-4o-mini call over the items not seen
+    before (each with its stamp date, for relative references); cached per item."""
     with _cache_lock:
-        if key in _item_cache:
-            _item_cache.move_to_end(key)
-            return _item_cache[key]
-    lines = []
-    for number, item in enumerate(items):
-        when, body = said(item.content)
-        text = " ".join(body.split())
-        if len(text) > config.ASOF_ITEM_CHARS:
-            text = text[: config.ASOF_ITEM_CHARS] + " ..."
-        lines.append(f"{number} | said {when.isoformat() if when else 'unknown'} | {text}")
-    stats["judge_calls"] += 1
-    stats["judge_items"] += len(items)
-    try:
-        payload = llm.judge_asof_items(query, options, period, "\n".join(lines))
-    except Exception:  # noqa: BLE001
-        log.exception("as-of item judgement failed")
-        payload = None
-    names = ("valid", "not_valid", "about_period")
-    if not isinstance(payload, dict) or not all(isinstance(payload.get(name), list) for name in names):
-        stats["judge_failures"] += 1  # all three lists or nothing: a partial reply would withhold by default
-        return None
-    out: dict[str, set[str]] = {}
-    for name in names:
-        picked = set()
-        for value in payload[name]:
+        pending = [item for item in items if item.id not in _times]
+    if pending:
+        # One line per distinct (said date, text): a fact often repeats its turn
+        # word for word, and the model tends to skip a repeated line.
+        lines, line_of = [], {}
+        for item in pending:
+            when, body = said(item.content)
+            if item.kind == "raw":
+                body = body.partition(": ")[2] or body  # our own speaker label ("I: ")
+            text = " ".join(body.split())
+            if len(text) > config.ASOF_ITEM_CHARS:
+                text = text[: config.ASOF_ITEM_CHARS] + " ..."
+            key = (when, text)
+            if key not in line_of:
+                line_of[key] = len(lines)
+                lines.append(f"{len(lines)} | said {when.isoformat() if when else 'unknown'} | {text}")
+            line_of[item.id] = line_of[key]
+        stats["times_calls"] += 1
+        stats["times_items"] += len(lines)
+        try:
+            payload = llm.asof_times("\n".join(lines))
+        except Exception:  # noqa: BLE001
+            log.exception("as-of time extraction failed")
+            payload = None
+        if not isinstance(payload, dict) or not isinstance(payload.get("times"), list):
+            stats["times_failures"] += 1
+            return None
+        found: dict[int, list[tuple[Period, bool]]] = {number: [] for number in range(len(lines))}
+        for entry in payload["times"]:
+            if not isinstance(entry, list) or len(entry) != 4:
+                continue
             try:
-                number = int(value)
+                number = int(entry[0])
             except (TypeError, ValueError):
                 continue
-            if 0 <= number < len(items):
-                picked.add(items[number].id)
-        out["about" if name == "about_period" else name] = picked
-    _remember(_item_cache, key, out)
-    return out
+            start, end = parse_iso(entry[1]), parse_iso(entry[2])
+            if number in found and start and end and start[0] <= end[1]:
+                found[number].append(((start[0], end[1]), entry[3] in (1, True)))
+        with _cache_lock:
+            for item in pending:
+                _times[item.id] = found[line_of[item.id]]
+            while len(_times) > TIMES_MAX:
+                _times.popitem(last=False)
+    with _cache_lock:
+        return {item.id: _times.get(item.id, []) for item in items}
+
+
+def overlaps(a: Period, b: Period) -> bool:
+    return a[0] <= b[1] and a[1] >= b[0]
 
 
 def withhold(period: Period, judged: list[store.Item], returned: list[store.Item],
-             verdicts: dict[str, set[str]]) -> set[str]:
+             stated: dict[str, list[tuple[Period, bool]]]) -> set[str]:
     """Ids among *judged* to leave out, by rules (a) and (b) of the module doc."""
-    valid, not_valid, about = verdicts["valid"], verdicts["not_valid"], verdicts["about"]
+    def spans(item):
+        return [p for p, span in stated.get(item.id, []) if span]
+
+    any_valid_span = any(overlaps(p, period) for item in returned for p in spans(item))
     any_early = any((when := said(item.content)[0]) is not None and when <= period[1] for item in returned)
     out = set()
     for item in judged:
-        if item.id in valid:
-            continue
-        if item.id in not_valid and valid:
-            out.add(item.id)
+        own = spans(item)
+        if any_valid_span and own and not any(overlaps(p, period) for p in own):
+            out.add(item.id)  # (a)
             continue
         when = said(item.content)[0]
-        if any_early and when is not None and when > period[1] and item.id not in about:
-            out.add(item.id)
+        if (any_early and when is not None and when > period[1]
+                and not any(time[0] <= period[1] for time, _ in stated.get(item.id, []))):
+            out.add(item.id)  # (b)
     return out
 
 
@@ -269,10 +291,10 @@ def select_withheld(index: store.UserIndex, scores, query: str, options: list[st
     judged = [index.items[row] for row in rows]
     if not judged:
         return set()
-    verdicts = judge(query, options, period, judged)
-    if verdicts is None:
+    stated = times(judged)
+    if stated is None:
         return set()
-    out = withhold(period, judged, returned, verdicts)
+    out = withhold(period, judged, returned, stated)
     returned_ids = {item.id for item in returned}
     stats["applied"] += bool(out & returned_ids)
     stats["withheld"] += len(out & returned_ids)

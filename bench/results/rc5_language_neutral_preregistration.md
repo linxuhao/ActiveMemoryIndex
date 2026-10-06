@@ -133,3 +133,42 @@ re-validated on a newly written set) or reported open.
 ≈ 3.5M as-of (ingest, item calls, changed lists), ≈ 0.2M router, ≈ 3.5M
 MQuAKE, ≈ 0.3M render probe; the rest of the 35M for the adaptive-chunk
 addendum (`adaptive_chunk_rc5_addendum.md`). Priority if short: this study first.
+
+## Amendment 1 (2026-10-06, development; before any validation search)
+
+Development data only: rc4's synthetic streams (`asof2_streams.json`, 120
+questions) and rc4's TempReason L2 sample (200), re-ingested with rc4 code from
+the proxy cache into a development store (rc4's P lists reproduced 120/120 and
+200/200), plus 14 hand-written questions. R = rc4's verdicts; changed lists
+answered for N. ≈ 3.5M tokens.
+
+1. **Classifier prompt.** 10 of rc4's Chinese "YYYY年M月D日那天，我用的是哪家…？"
+   questions came back `event_on_date`. Added one sentence: a question naming a
+   single day is still `as_of_state` when it asks what someone had, used, owned,
+   was with or belonged to that day (examples about a phone, not from any
+   set). After: 100/100 dated as_of_state, 20/20 "now" other, 100/100 TempReason
+   as_of_state, periods equal to rc4's parser wherever it parsed one.
+2. **Item side redesigned.** The registered direct judgement (lists `valid` /
+   `not_valid` / `about_period`, then a per-memory "during" variant) failed on
+   development: gpt-4o-mini listed only the memory that answers the question,
+   so TempReason withholding fired on 44–52 of 200 questions against rc4's 200.
+   Replaced by **time extraction**: one gpt-4o-mini call over the candidates not
+   seen before returns, for every memory whose text states a time, its start and
+   end at the text's own precision (YYYY / YYYY-MM / YYYY-MM-DD; relative times
+   such as "yesterday", "上周", "ayer" resolved against the memory's stamp date)
+   and whether it is a span something held over; cached per item. Code then
+   applies rc4's two rules on ISO dates: (a) an item whose spans all miss the
+   period is withheld when a returned item has a span covering it; (b) an item
+   said after the period that states no time starting by the period's end is
+   withheld when a returned item was said by its end. This answers the two
+   questions the brief asks (a state not valid during the period; said after but
+   about the period) with the model reading the language and code comparing
+   dates. Details found on development and fixed: facts repeating their turn
+   share one line (the model skipped repeats; our own speaker label is
+   stripped); compact JSON; month precision kept; same-month spans flagged as
+   spans; rule (b) keeps an item only for a time that starts by the period's end
+   (rc4 kept any year; with relative times read, "今天早上" said after the
+   period would otherwise keep a later value).
+3. Development result of the final version: rc4 synthetic N − R −1 (0 W / 1 L;
+   lists identical 101/120); TempReason L2 N − R −2 (0 W / 2 L; identical
+   185/200). The gates and sets above are unchanged.

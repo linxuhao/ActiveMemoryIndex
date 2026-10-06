@@ -345,15 +345,16 @@ LLM_MAX_TOKENS_INTENT = _int("AMI_LLM_MAX_TOKENS_INTENT", 500)
 # question that asks for a state at a stated date, returned items not valid at
 # that date are withheld and their slots refilled from the ranking.
 # gpt-4o-mini classifies every Search question (one call per distinct question,
-# beside the recall rewrite, cached) and, for an as-of state question, judges
-# the candidates in one call. Membership only. Off.
+# beside the recall rewrite, cached) and, for an as-of state question, reads the
+# times stated by the candidates in one call (cached per item); code compares
+# ISO dates. Membership only. Off.
 ASOF_SELECT = _env("AMI_ASOF_SELECT", "0") != "0"
-# Candidates the item-side call judges: what the Search would return, then the
+# Candidates the item-side call reads: what the Search would return, then the
 # next ranked items (refill), at most this many, each cut to this many characters.
 ASOF_ITEMS = _int("AMI_ASOF_ITEMS", 200)
-ASOF_ITEM_CHARS = _int("AMI_ASOF_ITEM_CHARS", 300)
+ASOF_ITEM_CHARS = _int("AMI_ASOF_ITEM_CHARS", 400)
 LLM_MAX_TOKENS_ASOF = _int("AMI_LLM_MAX_TOKENS_ASOF", 80)
-LLM_MAX_TOKENS_ASOF_ITEMS = _int("AMI_LLM_MAX_TOKENS_ASOF_ITEMS", 800)
+LLM_MAX_TOKENS_ASOF_ITEMS = _int("AMI_LLM_MAX_TOKENS_ASOF_ITEMS", 3000)
 
 # --- direct corpus interaction ------------------------------------------------
 # Replace the embedding selection with a gpt-4o-mini agent that greps and reads

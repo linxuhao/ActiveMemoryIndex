@@ -801,23 +801,24 @@ def classify_question(query: str, options: list[str] | None) -> dict | None:
 ASOF_SCOPE_SYSTEM = """You read a question that will be answered from a person's memory log and say how it uses a date. The question can be in any language, and its date can be written in any way: in digits, in words, in native numerals or in another calendar.
 
 - "kind":
-  - "as_of_state": it asks what something WAS at, as of, by, in or during a stated date or period: a value, title, role, status, address, city, owner, employer, team, partner, vehicle, price, count or membership as it stood then, whatever the tense or wording. "What was Maya's job title as of September 5, 2025?" "Which team did he play for in January 1976?" "Who owned the house in 2019?" "What car was she driving in March 2021?" "截至2024年1月，他住在哪里？" "2023年5月时她的职位是什么？" "2022年8月，他在哪个乐队？" "¿Dónde vivía en marzo de 2019?" "Quel était son poste en janvier 1976 ?" "Bei welchem Verein spielte er am ersten Mai zweitausendzehn?" "二〇一九年三月、彼はどこに住んでいましたか？"
+  - "as_of_state": it asks what something WAS at, as of, by, in or during a stated date or period: a value, title, role, status, address, city, owner, employer, team, partner, vehicle, price, count or membership as it stood then, whatever the tense or wording. "What was Maya's job title as of September 5, 2025?" "Which team did he play for in January 1976?" "Who owned the house in 2019?" "What car was she driving in March 2021?" "截至2024年1月，他住在哪里？" "2023年5月时她的职位是什么？" "2022年8月，他在哪个乐队？" "¿Dónde vivía en marzo de 2019?" "Quel était son poste en janvier 1976 ?" "Bei welchem Verein spielte er am ersten Mai zweitausendzehn?" "二〇一九年三月、彼はどこに住んでいましたか？" A question that names a single day is still "as_of_state" when it asks what someone had, used, owned, was with or belonged to on that day: "On 1 June 2021, which phone was she using?" "2021年6月1日，她用的是什么手机？"
   - "event_on_date": it asks about something that happened, was done, said, bought, visited or attended on or around a date, or uses the date to point at an event: "What did Tomás do on 1 September 2023?" "Where did I go on the 5th of May 2023?" "Who did I meet at the conference in June 2022?" "2023年5月8日我们聊了什么？" "¿Qué compré el 3 de julio de 2023?"
   - "other": it names no date or period; the year is part of a name, title, model or quantity ("S.S. Lazio 1900", "the 1984 novel"); the date cannot be placed on a calendar without knowing today's date ("last year", "yesterday"); or it asks for the current value.
 - "start" and "end": the first and the last day of the date or period the question names, as YYYY-MM-DD ("in March 2021": 2021-03-01 and 2021-03-31; "in 2019": 2019-01-01 and 2019-12-31; "as of 5 June 2022": 2022-06-05 and 2022-06-05); null for "other".
 
 Return JSON only: {"kind": "as_of_state", "start": "2025-09-05", "end": "2025-09-05"}"""
 
-ASOF_ITEMS_SYSTEM = """You check memories from a person's memory log against a question about a past date or period. The question and the memories can be in any language.
+ASOF_ITEMS_SYSTEM = """You find the times stated in memories from a person's memory log. The memories can be in any language, and a time can be written in any way: in digits, in words, in native numerals or in another calendar.
 
-You get the question, the period it asks about (its first and last day), and numbered memories `N | said YYYY-MM-DD | text`; "said" is the day the memory was recorded ("unknown" when not known). "I" in a memory is the person who owns the log.
+Each memory is `N | said YYYY-MM-DD | text`; "said" is the day it was recorded ("unknown" when not known).
 
-List the numbers of:
-- "valid": memories that state a value of the thing the question asks about as holding during the period: with a date or time span in the text that covers or overlaps the period, or said during the period.
-- "not_valid": memories that state a value of the thing the question asks about together with a date or time span, written in the memory's text, at which that value held, when that time does not overlap the period. A memory whose text gives no such time is not in this list.
-- "about_period": memories said after the last day of the period that nevertheless describe what was the case or what happened during the period: by a date or time span in the text, or by a time reference relative to the day they were said ("yesterday", "last week", "two months ago", in any language) that falls in the period.
+For every memory whose text gives a date, a month, a year or a time span, or a time relative to the day it was said ("yesterday", "last week", "two months ago", in any language), give one entry per time it states, as a list [n, start, end, span]:
+- n: the memory's number;
+- start and end: where that time starts and ends, exactly as precise as the text: "YYYY-MM-DD" when it names a day, "YYYY-MM" when it names a month, "YYYY" only when it names just a year. Never drop a month or a day the text gives. ("from Jan, 1996 to Mar, 1997": "1996-01", "1997-03"; "from Jan, 2017 to Jan, 2018": "2017-01", "2018-01"; "in March 2012": "2012-03", "2012-03"; "from 2010 to 2014": "2010", "2014"; "yesterday", said 2015-06-01: "2015-05-31", "2015-05-31");
+- span: 1 when the text gives both a start and an end for something that held over that time ("from ... to ...", "between ... and ...", "until"), even when start and end are the same ("from Jan, 2001 to Jan, 2001": 1); 0 when it gives one time point (a date, a month or a year).
+Leave out memories whose text states no time; the "said" date is not part of the text. Go through the memories one by one and give entries for EVERY memory that states a time, whatever it is about and even when it resembles another one.
 
-A memory can be in no list. Return JSON only: {"valid": [], "not_valid": [], "about_period": []}"""
+Return compact JSON only, no spaces or line breaks: {"times":[[0,"2017-01","2018-01",1],[3,"2015-05-31","2015-05-31",0]]}"""
 
 
 def _question(query: str, options: list[str] | None) -> str:
@@ -835,11 +836,9 @@ def classify_asof(query: str, options: list[str] | None) -> dict | None:
     return _json_object(_complete(ASOF_SCOPE_SYSTEM, _question(query, options), config.LLM_MAX_TOKENS_ASOF))
 
 
-def judge_asof_items(query: str, options: list[str] | None, period, numbered: str) -> dict | None:
-    """The item judgement's JSON object ({"valid", "not_valid", "about_period"}),
+def asof_times(numbered: str) -> dict | None:
+    """The time extraction's JSON object ({"times": [[n, start, end, span], ...]}),
     or None on any failure; app/asof.py validates it."""
     if not config.llm_available() or not numbered:
         return None
-    user = (f"{_question(query, options)}\nPeriod: {period[0].isoformat()} to {period[1].isoformat()}\n\n"
-            f"Memories:\n{numbered}")
-    return _json_object(_complete(ASOF_ITEMS_SYSTEM, user, config.LLM_MAX_TOKENS_ASOF_ITEMS))
+    return _json_object(_complete(ASOF_ITEMS_SYSTEM, numbered, config.LLM_MAX_TOKENS_ASOF_ITEMS))

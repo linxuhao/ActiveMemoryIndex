@@ -49,7 +49,6 @@ ALLOWED_WORDS = {
     ("updates.py", ("i", "me")): "protocol tokens: stage 2's user marker 'me' and our own speaker label 'I'",
     ("updates.py", ("CORRECTION", "EXPLICIT_REPLACEMENT")): "stage-1 label enum",
     ("asof.py", ("as_of_state", "event_on_date", "other")): "classifier label enum",
-    ("asof.py", ("about_period", "not_valid", "valid")): "item-judgement JSON keys",
     ("llm.py", ("n_a", "na", "none", "null")): "JSON null spellings in a model-written key (AMI_FACT_KEYS, off)",
     ("main.py", ("bearer", "token", "x-api-key")): "auth scheme enum",
     ("main.py", ("bearer", "token")): "HTTP Authorization scheme names",
