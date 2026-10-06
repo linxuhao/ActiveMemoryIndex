@@ -120,8 +120,8 @@ RETURN_CHAR_BUDGET = _int("AMI_RETURN_CHAR_BUDGET", 400000)
 #   (ANSWER_INPUT_TOKENS - ANSWER_PROMPT_TOKENS) / TOKEN_SAFETY - tokens(query + options)
 # and each memory costs tokens(content) + ANSWER_ITEM_TOKENS. The largest
 # platform answer template measured is ScriptMem's CHOICE_ANSWER_TEMPLATE at
-# ~430 o200k tokens; 1,024 leaves room for chat framing and an instruction
-# block we have not seen. ANSWER_ITEM_TOKENS covers "- [<ISO timestamp>] " and
+# 374 o200k tokens (LongMemEval/LoCoMo 284, CL-bench 103, BEAM 73); 1,024
+# leaves room for chat framing and an instruction block we have not seen. ANSWER_ITEM_TOKENS covers "- [<ISO timestamp>] " and
 # a newline (17 tokens measured). TOKEN_SAFETY 1.15 covers the tokenizer
 # mismatch measured in bench/results/token_budget_20261006.md.
 ANSWER_INPUT_TOKENS = _int("AMI_ANSWER_INPUT_TOKENS", 117_760)
