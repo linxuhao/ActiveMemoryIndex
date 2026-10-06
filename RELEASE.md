@@ -1,3 +1,134 @@
+# Release candidate academic-v4-20261006-rc5
+
+rc5 is the release candidate for the official Full: rc4 (`academic-v4-20261006-rc4`, commit
+`a0b3e99`) with one rule applied everywhere and one cap removed. The tag
+`academic-v4-20261006-rc5` identifies the fixed commit once the release step creates it; the
+image is `activememoryindex:academic-v4-20261006-rc5`, built from the repository Dockerfile
+with OCI labels (revision = the tagged commit).
+
+| step | commit | what |
+|---|---|---|
+| rc4 | `a0b3e99` | token budget, deadlines, as-of selection (deployed at the time of writing) |
+| rc5 code | `0d43865`, `6616634` | no language-dependent regex or word list; time reader; adaptive chunk without its own cap |
+| rc5 pre-registrations | `8965c49` (amendment 1 in `6616634`, before any validation search) | `bench/results/rc5_language_neutral_preregistration.md`, `adaptive_chunk_rc5_addendum.md` |
+| rc5 | this branch | results and docs |
+
+## The rule: no language-dependent heuristics
+
+No regex or word list that depends on a natural language takes part in any decision — month
+names, relative-time words, range words, history words, pronoun sets, relative-change words,
+stopword or script tests — not even as a pre-filter that can only add protection. Real users
+write in any language. `gpt-4o-mini` reads language, only when needed and cached; code handles
+only our own id and stamp formats, ISO dates the model returns, JSON and digits.
+`tests/test_language_neutral.py` fails on any regex or word list in `app/` that is not on its
+reviewed allowlist (on rc4's `app/` it flags 13 literal regexes, 10 run-time-built ones and 10
+word lists).
+
+### Audit of every regex and word list in rc4's `app/`
+
+| where | pattern / list | purpose | language-dependent | rc5 |
+|---|---|---|---|---|
+| `asof.py` | `_MONTHS` / `MON` (month names, 7 languages), `PATTERNS` (mdy, dmy, my, CJK/Korean y-m-d, dotted, ISO, bare year) | parse the question's date and item ranges | yes | removed: question classifier + time reader |
+| `asof.py` | `ANY_YEAR` / `YEAR` gate (year in digits) | open the as-of path; exempt items naming a year | yes (二〇二四, words) | removed: classify every question; stated times from the time reader |
+| `asof.py` | `RANGE_JOIN`, `RANGE_OPEN` (to/until/到/hasta/bis…, from/between/从/desde…) | find date ranges | yes | removed: the model flags spans |
+| `asof.py` | `RELATIVE` (yesterday/ayer/hier/gestern/上周/先週/어제…) | keep relative-time items | yes | removed: the model resolves relative times against the stamp |
+| `asof.py` | `STAMP`, `_DELIVERED`, `parse_iso` | our stamp, our chunk/span ids, ISO from the model | no | kept |
+| `updates.py` | `HISTORY_QUESTION`, `DATED_QUESTION`, `DATED_CJK` | protection pre-filter | yes | removed: router (`QUESTION_SCOPE2_SYSTEM`) only |
+| `updates.py` | `RELATIVE_WORDS` | mark relative updates | yes | removed: stage 2 `relative` |
+| `updates.py` | `SELF` = {me, i, my, myself, mine, user, the user} | the user's own subject | yes | replaced by protocol tokens {"me" (stage 2 is told to write it in every language), "i" (our own speaker label)} |
+| `updates.py` | `_SCRIPTS` + `_STOPWORDS` + `[a-zà-ÿ']+` | render-language check | yes | removed: stage-2 language tags must be equal |
+| `updates.py` | `STAMP`, `RELATIVE_SIGN` (`^[+-]\d`), `_phrase` (escaped quoted value) | our stamp; a signed number; verbatim containment | no | kept |
+| `main.py` | `_TIME_HINT` | request-log field only | yes | removed with the field |
+| `main.py` | `STAMPED`, `RAW_ID` | our stamp, our raw id | no | kept |
+| `llm.py` | `_KEY_JUNK` (`[^a-z0-9._]+`), `[a-z]`, {null, none, n_a, na} | fact-key normalisation (`AMI_FACT_KEYS`) | Latin-only keys | dead on the release path (flag off); left, reported |
+| `llm.py` | `_KEYED_OBJECT` | JSON salvage (`AMI_FACT_KEYS`) | no | left (flag off) |
+| `llm.py` | `_REASONING`, `\{.*\}`, list-line markers, `_ISO_DAY` / ISO fullmatch | `<think>` markup, JSON, bullets/numbers, ISO | no | kept |
+| `dci.py` | `_ITEM_ID`; the agent's own grep pattern | our ids; DCI research (off) | no | kept |
+
+### Replacements
+
+* **As-of selection** (`app/asof.py`). *Question side*: one `gpt-4o-mini` classification per
+  distinct (question, options) on every Search, run in parallel with the recall-question
+  rewrite (no added latency) and cached: `as_of_state | event_on_date | other` and the ISO start
+  and end. *Item side*: for an `as_of_state` question, one call over the candidates not read
+  before (what the Search would return, then the next ranked items, ≤ `AMI_ASOF_ITEMS`=200,
+  ≤ 400 characters each), sent with their stamp dates; it returns every time each text states
+  (ISO at the text's precision, relative times resolved, span or not), cached per item. Code
+  applies rc4's two rules on ISO dates (an item whose spans all miss the period is withheld when
+  a returned item's span covers it; an item said after the period that states no time starting
+  by its end is withheld when a returned item was said by its end). Refill, evidence-only and
+  "a failure withholds nothing" are unchanged; event questions withhold nothing. The registered
+  direct judgement ("which items are not valid / about the period") was replaced on development
+  data before validation because gpt-4o-mini listed only the answering memory (amendment 1).
+* **Updates router and exceptions** (`app/updates.py`). The regex pre-filters are gone; the
+  router (`needs_past_value` / `time_scoped`) decides protection for every version, and stage
+  2's `relative` and `subject_is_user` decide the rest.
+* **Render-language check.** Stage 2 returns `statement_language` and `current_language`
+  (ISO 639-1) and renders in the statement's language; a render needs both tags and equal
+  primary subtags. Chosen over a second LLM check: zero extra calls (≈ 10 completion tokens per
+  record) against one call per rendered record; the model that wrote the sentence names its
+  language in the same reply.
+
+### Validation (pre-registered; `bench/results/rc5_language_neutral_20261006.md`)
+
+| gate | result | pass |
+|---|---|---|
+| as-of, English/Chinese vs rc4 (TempReason L2 fresh 150 + synthetic en/zh dated 80) | 224 → 230, +6 (6 W / 0 L) | yes |
+| as-of, new languages (synthetic fr/de/es/ja dated, digits / words / native numerals) | 136 → 154, +18 (19 W / 1 L, p = 4e-5); fr +3, de +4, es +6, ja +5 | yes |
+| guards: LoCoMo dated 194 / KU 78 / TempReason L3 100 / "now" 48 | −1 / 0 / 0 / 0 | yes |
+| updates router alone, every language of round-5, round-5b and new fr/de sets | recall 0.95–1.00, false protection 0.00 everywhere | yes |
+| MQuAKE 400 × 2 replicates | rc5 +70.0 over no withholding (81 W / 7 L); rc4 +65.0; rc5 − rc4 +5.0 (9 / 2) | yes |
+| render probe (24 updates, 6 languages) | 24 / 24 rendered, all in the statement's language | (reported) |
+
+Classifier: 236 / 240 synthetic dated questions `as_of_state` with 240 / 240 correct periods
+(dates in words, 二〇二三年, 令和); the 4 misses are Japanese and withhold nothing.
+
+**Added cost.** Search: the classifier ≈ 680 prompt + 16 completion tokens per distinct
+question, beside the recall call (no added wall time); the time reader on as-of state questions
+only, ≈ 1,000 + 155 tokens per call (long LoCoMo-sized candidate lists ≈ 6.7k + 1.4k), one
+sequential call more on those questions. Add: ≈ 10 completion tokens per accepted update
+statement (the two tags); no new call.
+
+## Adaptive chunk delivery without its own cap (`bench/results/adaptive_chunk_rc5_20261006.md`)
+
+`AMI_ADAPTIVE_CHUNK_TOTAL` is removed; adaptive delivery is bounded by `top_k`, the character
+budget and the token budget like every mode (every BEAM, LoCoMo and LongMemEval list stayed
+inside the token budget). BEAM-100K conversations 1–5 (100 questions): mean rubric B 0.466,
+L4 0.447 (13 up, 13 down; L4 now delivers 169k vs 139k characters). LoCoMo 770: L4 lists
+byte-identical to rc4's (+5.58 points, unchanged). LongMemEval temporal 57 → 57, knowledge-update
+55 → 58. **Not recommended** (BEAM point estimate below B): `AMI_ADAPTIVE_CHUNK=0` stays.
+
+## Recommended production environment (relative to `academic-rc4-20261006.env`)
+
+```
+AMI_IMAGE=activememoryindex:academic-v4-20261006-rc5
+```
+
+Nothing else changes: `AMI_ASOF_SELECT=1`, `AMI_UPDATE_DETECT/RENDER/WITHHOLD=1`,
+`AMI_UPDATE_VERSION=7`, `AMI_ADAPTIVE_CHUNK=0` and every other line stay as in rc4. The new
+knobs keep their defaults (`AMI_ASOF_ITEMS=200`, `AMI_ASOF_ITEM_CHARS=400`,
+`AMI_LLM_MAX_TOKENS_ASOF=80`, `AMI_LLM_MAX_TOKENS_ASOF_ITEMS=3000`); `AMI_ASOF_POOL`,
+`AMI_ASOF_GRACE_DAYS` and `AMI_ADAPTIVE_CHUNK_TOTAL` no longer exist (ignored if set). The
+store is compatible (no schema change; the embedding identity is unchanged).
+
+## Studies' spend
+
+≈ 19.1M fresh gpt-4o-mini tokens (cap 35M) and 0.64M text-embedding-v4 tokens (cap 3M), through
+the caching, metering proxy (`bench/llm_proxy.py`), real-API concurrency 8.
+
+## Validation of the code
+
+* Whole suite in the rc4 image with the rc5 tree, network-free, fake providers: **31 test files,
+  0 failed, 371 checks** (rc4's suite plus `test_language_neutral.py`; `test_asof.py`
+  rewritten for the classifier and time reader).
+* Built-image checks on a separate container (contract smoke, overload, huge-query budget, a
+  French as-of query end to end): see the GitHub release notes.
+
+No official Full has started; rc5 has not been deployed. No benchmark data or gold answers are
+bundled with or consulted by the service.
+
+---
+
 # Release candidate academic-v4-20261006-rc4
 
 rc4 is the release candidate for the official Full: rc3 (`academic-v4-20261005-rc3`, commit

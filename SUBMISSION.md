@@ -5,10 +5,12 @@ Release metadata and technical notes. Keep in sync with `README.md` and `RELEASE
 **Status (2026-10-06).** On 2026-10-01 the user reported submitting the access application.
 Platform Smokes have since been run (three, on 2026-10-04 and 2026-10-05); the results are
 the platform's and are not reproduced here. The **official Full has not started**. At the time
-of writing the deployed version is release candidate rc3 (the 20261001 release plus the
-explicit-update mechanism and the admission valve). rc4 adds a token-aware return budget,
-request deadlines, the rc4 embedding settings and as-of evidence selection; it is the
-candidate for the Full (see `RELEASE.md`) and has not been deployed or bound to a Full. The
+of writing the deployed container runs rc4 (the 20261001 release plus the explicit-update
+mechanism, the admission valve, a token-aware return budget, request deadlines, the rc4
+embedding settings and as-of evidence selection). rc5 removes every language-dependent
+regex and word list from the decision paths (gpt-4o-mini reads the language instead) and
+removes adaptive chunk delivery's separate cap; it is the candidate for the Full (see
+`RELEASE.md`) and has not been deployed or bound to a Full. The
 platform's concrete Answer/Eval models are not confirmed; the
 [official public configuration](https://github.com/AML-memory/agent-memory-leaderboard/blob/main/api_config.py)
 leaves them unset and public materials do not establish a model switch. The participant
@@ -25,13 +27,13 @@ service.
 | field | value |
 |---|---|
 | System name | ActiveMemoryIndex |
-| Version | `academic-v4-20261006-rc4` (release candidate; the tag identifies the fixed commit), built on `academic-v4-20261001` |
+| Version | `academic-v4-20261006-rc5` (release candidate; the tag identifies the fixed commit), built on `academic-v4-20261001` |
 | Evaluation type | Textual Memory |
 | Division / route | Academic Methods · API (self-hosted) |
 | Repository | https://github.com/linxuhao/ActiveMemoryIndex |
 | Endpoint URL | `https://amindex.linxuhao.app` (HTTPS, Cloudflare; see the GitHub release notes for deployment verification) |
 | Contact | Xuhao Lin · linxuhao84@gmail.com · independent researcher |
-| Models used by Add and Search | `gpt-4o-mini` only, for extraction, recall questions, the explicit-update prompts and the as-of router; remote `text-embedding-v4`, 1024 dimensions, for embeddings. BGE is historical local research only |
+| Models used by Add and Search | `gpt-4o-mini` only, for extraction, recall questions, the explicit-update prompts and the as-of question classifier and time reader; remote `text-embedding-v4`, 1024 dimensions, for embeddings. BGE is historical local research only |
 
 ## Key flow
 
@@ -57,7 +59,7 @@ deployment and shared with the platform through the access-request flow (stored 
 ```bash
 git clone https://github.com/linxuhao/ActiveMemoryIndex.git
 cd ActiveMemoryIndex
-git checkout academic-v4-20261006-rc4   # the rc4 release tag
+git checkout academic-v4-20261006-rc5   # the rc5 release tag
 cp .env.academic.example .env.academic
 # Set OPENAI_API_KEY, AMI_EMBED_API_KEY, AMI_AUTH_TOKEN and region/workspace endpoint.
 AMI_ENV_FILE=.env.academic docker compose --env-file .env.academic -p ami-academic up -d --build
@@ -76,8 +78,8 @@ AMI_ENV_FILE=.env.academic docker compose --env-file .env.academic -p ami-academ
 | `AMI_EMBED_TIMEOUT` / `AMI_EMBED_RETRIES` / `AMI_EMBED_CONCURRENCY` | `40` / `1` / `16` (rc4 defaults and profile): per-attempt timeout, retries, provider requests in flight; every attempt is clipped to the request deadline |
 | `AMI_ADD_DEADLINE` / `AMI_SEARCH_DEADLINE` | `85` / `85` s from arrival (admission wait included): an upstream call the deadline leaves no time for is not made; 503 + `Retry-After`, nothing persisted |
 | `AMI_ANSWER_INPUT_TOKENS` / `AMI_ANSWER_PROMPT_TOKENS` / `AMI_ANSWER_ITEM_TOKENS` / `AMI_TOKEN_SAFETY` | `117760` / `1024` / `20` / `1.15`: token-aware return budget against the platform's Answer window (always on) |
-| `AMI_ASOF_SELECT` | `1` in the rc4 profile (default `0` in code): as-of evidence selection, declared below; passed its pre-registered gate |
-| `AMI_ADAPTIVE_CHUNK` | `0`: adaptive chunk delivery; failed its pre-registered gate, not used |
+| `AMI_ASOF_SELECT` | `1` in the rc4 and rc5 profiles (default `0` in code): as-of evidence selection, declared below; passed its pre-registered gates (rc4, and rc5's language-neutral version) |
+| `AMI_ADAPTIVE_CHUNK` | `0`: adaptive chunk delivery; not recommended (rc4 gate failed; rc5 without its cap: BEAM below the baseline), not used |
 
 The release retains raw turns plus facts, extraction and recall enabled, recall weight `0.5`,
 raw-first ordering, neighbor window radius `1`, at most `100` results within `top_k`, a
@@ -100,6 +102,21 @@ explicit-update mechanism and as-of evidence selection (below) are the deliberat
   `Retry-After` (admission valve, below) rather than 500, before anything is persisted.
 
 ## Validation and evaluation flow
+
+**No language-dependent heuristics (rc5).** No regex or word list that depends on a natural
+language decides anything in the service — not month names, relative-time, range or history
+words, pronoun sets, stopword or script tests, and not as a protection-only pre-filter. Where
+language must be read, `gpt-4o-mini` reads it (only when needed, cached); code handles only our
+own formats, ISO dates the model returns, JSON and digits. `tests/test_language_neutral.py`
+fails on any regex or word list in `app/` that is not on its reviewed allowlist. Pre-registered
+validation against rc4's regex version (`bench/results/rc5_language_neutral_20261006.md`):
+English/Chinese as-of +6 of 230 (6 / 0), new French, German, Spanish and Japanese streams with
+dates in digits, words and native numerals +18 of 160 (19 / 1), LoCoMo dated −1 of 194, other
+guards unchanged; the update router alone recall ≥ 0.95 and 0 false protections in five
+languages; MQuAKE +70.0 of 400 over no withholding (rc4 +65.0).
+
+**rc5 source tests.** The whole suite, network-free in the image with fake LLM and embedder:
+**31 test files, 0 failed** (counts in `RELEASE.md`), including `test_language_neutral.py`.
 
 **rc4 source tests.** The whole suite, run network-free in the rc4 image with fake LLM and
 embedder: **30 test files, 376 checks, 0 failed**, including the rc4 cases for the token budget
@@ -129,7 +146,7 @@ unchanged). Details in the explicit-update section below.
 
 1. Access application submitted on 2026-10-01 (user report). Platform Smokes have been run
    (three, 2026-10-04/05).
-2. Use the fixed rc4 tag and verify the authenticated public endpoint before the Full.
+2. Use the fixed rc5 tag and verify the authenticated public endpoint before the Full.
 3. Run the platform's official Smoke against the bound version and inspect it (at most 30
    per key/track this cycle, at most one per hour; private).
 4. Start the official Full only after readiness and Smoke pass: at most two per key/track,
@@ -243,9 +260,9 @@ the memory text itself.
    memory that does not fit is skipped, never cut, and the response never exceeds the budget.
    The 400,000-character budget stays as an extra cap. Measurements:
    `bench/results/token_budget_20261006.md`.
-7. **As-of evidence selection (rc4, on in the profile):** for a question asking for a state at a
-   stated date, returned items not valid at that date are withheld and their slots refilled from
-   the ranking (declared below).
+7. **As-of evidence selection (rc4, on in the profile; rc5 language-neutral):** for a question
+   asking for a state at a stated date, returned items not valid at that date are withheld and
+   their slots refilled from the ranking (declared below).
 
 Search returns memory evidence only. It never produces or disguises a final answer, and never
 reads outside the requested `user_id`.
@@ -268,10 +285,12 @@ historical memory. The explicit-update mechanism stays inside those boundaries:
      verbatim (whitespace-normalised) in a user turn.
   2. *Stage 2, update extraction* (Add, only for accepted statements): subject, attribute,
      new value (must appear in the user turn), old value (only if stated), whether the subject
-     is the user, whether the change is relative, and one present-tense sentence stating the
-     current value in the turn's language.
+     is the user, whether the change is relative, one present-tense sentence stating the
+     current value in the turn's language, and (rc5) the ISO 639-1 language of the statement
+     and of that sentence.
   3. *Render* (Add): that sentence is stored as one extra memory beside the extracted facts,
-     only for absolute updates and only if its language matches the user's turn. It is
+     only for absolute updates and only if stage 2's two language tags are equal (rc5; no
+     script or stopword heuristic, no extra call). It is
      derived from the user's own update turn when the chunk is written, before any question
      exists.
   4. *Search-time verifier*: shown the update and candidate earlier memories of the same
@@ -280,9 +299,12 @@ historical memory. The explicit-update mechanism stays inside those boundaries:
      question; verdicts are stored.
   5. *Search-time router*: reads the question and returns two booleans (needs the past value;
      time-scoped). If either is true, nothing is withheld. It is called only when withholding
-     would change the returned list, and cached per query.
+     would change the returned list, and cached per query. rc5: it is the only decider, in
+     every language; the English/CJK pattern pre-filter and the English relative-change and
+     pronoun word lists are removed (stage 2's `relative` and `subject_is_user` decide).
 * **Switches:** `AMI_UPDATE_DETECT`, `AMI_UPDATE_RENDER`, `AMI_UPDATE_WITHHOLD`,
-  `AMI_UPDATE_VERSION=7`; the three flags are off in code and on in the rc3 profile.
+  `AMI_UPDATE_VERSION=7`; the three flags are off in code and on in the rc3, rc4 and rc5
+  profiles.
 * **The query only selects or withholds evidence.** No returned text is generated from the
   question: Search returns verbatim turns, extracted facts and the Add-time rendered
   sentence, minus the withheld items. Relative updates, history/date questions and the update's
@@ -296,22 +318,32 @@ historical memory. The explicit-update mechanism stays inside those boundaries:
 
 Within the same Q18 boundaries as the explicit-update mechanism:
 
-* **Model:** `gpt-4o-mini` only, one prompt (`ASOF_SCOPE_SYSTEM` in `app/llm.py`), at Search.
-  Its output never becomes an answer and is never returned.
+* **Model:** `gpt-4o-mini` only, at Search, two prompts in `app/llm.py`. Their output never
+  becomes an answer and is never returned.
 * **Purpose:** a question such as "What was Maya's job title as of 5 September 2025?" is
   answered with the latest value when later values are also returned. For such a question,
-  items not valid at the stated date are left out of the returned set: (a) an item stating
-  explicit date ranges none of which overlaps the date, when another returned item's range
-  does; (b) an item said after the date that names no year, when another returned item was said
-  by then — unless it uses relative-time wording and was said within 31 days.
-* **What the model does:** reads the question (and options) and returns `{"kind": "as_of_state"
-  | "event" | "other", "as_of": "YYYY[-MM[-DD]]"}`. Rule (b) applies only to `as_of_state`, rule
-  (a) to `as_of_state` and `event`, nothing to `other`. It is called only when the question
-  contains a year in digits and the rules, at the period a multilingual date parser read, would
-  change the returned list; cached per question. Any failure withholds nothing.
+  items not valid at the stated date are left out of the returned set.
+* **Question classifier** (`ASOF_SCOPE_SYSTEM`): on every Search, one call per distinct
+  (question, options), run beside the recall-question rewrite and cached. It returns
+  `{"kind": "as_of_state" | "event_on_date" | "other", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}`
+  for a question in any language, with the date written in any way. Only `as_of_state` with a
+  period goes further.
+* **Time reader** (`ASOF_ITEMS_SYSTEM`): for an `as_of_state` question only, one call over the
+  candidate memories of the same user not read before (what the Search would return, then the
+  next ranked ones, at most 200), each with its own stamp date. It returns the times each
+  memory's text states (ISO dates at the text's precision; relative times resolved against the
+  stamp) and whether each is a span. It never sees the question. Cached per memory.
+* **Rules, in code on ISO dates:** (a) a memory whose spans all miss the period is withheld when
+  a returned memory has a span covering it; (b) a memory said after the period that states no
+  time starting by its end is withheld when a returned memory was said by its end. Event
+  questions, unread memories and any failed call withhold nothing.
 * **The query only selects evidence.** Nothing is rewritten or generated; the freed slots are
   refilled with stored memories from the ranking. Switch: `AMI_ASOF_SELECT` (off in code, on in
-  the rc4 profile). Result and router behaviour: `bench/results/asof_selection_20261006.md`.
+  the rc4 and rc5 profiles). Results: `bench/results/asof_selection_20261006.md` (rc4) and
+  `bench/results/rc5_language_neutral_20261006.md` (rc5).
+* **Added cost:** ≈ 700 gpt-4o-mini tokens per distinct Search question (classifier; no added
+  wall time), and ≈ 1,150 tokens and one sequential call more on as-of state questions (time
+  reader; more for long candidate lists).
 
 ### Request deadlines
 
@@ -347,7 +379,8 @@ valve off, platform concurrency 16/16. See `README.md`.
 | Token-aware return budget (rc4) | The Answer window is token-counted and shared with the question; a character cap alone ignores tens-of-KB task prompts and CJK text |
 | Request deadline 85 s (rc4) | Per-call timeouts summed past the ~100 s edge cut; a deadline bounds the whole request and fails it cleanly (503) before persistence |
 | As-of evidence selection (rc4, on) | Passed its pre-registered gate: +30 of 300 on as-of questions (31 W / 1 L), 0 on LoCoMo dated and knowledge-update guards |
-| Adaptive chunk delivery (rc4, off) | +5.6 points on LoCoMo, but identical to an equal-text control: the gain is returned volume, not the delivery unit; failed its gate |
+| No language-dependent heuristics (rc5) | Real users write in any language; a pattern sees only the languages it was written for. gpt-4o-mini reads language; code compares ISO dates. +18 of 160 on new-language as-of questions, no loss on English/Chinese |
+| Adaptive chunk delivery (off) | rc4: +5.6 points on LoCoMo but identical to an equal-text control. rc5 without its own cap: BEAM 0.466 → 0.447; not recommended |
 
 ## 全部方法改动 · All Method Changes from the Original Paper
 
@@ -429,8 +462,8 @@ What is **new** in this submission (not in the paper):
    submission; not in the paper.
 8. **Token-aware return budget and request deadlines** (rc4) — service engineering against
    the platform's published Answer window and the edge's request cut; not in the paper.
-9. **As-of evidence selection** (rc4) — described above (FAQ Q18 declaration). New in this
-   submission; not in the paper.
+9. **As-of evidence selection** (rc4; language-neutral in rc5) — described above (FAQ Q18
+   declaration). New in this submission; not in the paper.
 10. **Contract compliance** — Synchronous persistence (200 only after SQLite commit),
    `user_id` isolation, `request_id` echo, 422 on malformed input, `/health` liveness.
    These are competition requirements, not research concerns.
