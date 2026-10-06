@@ -56,9 +56,16 @@ EMBED_BATCH = _int("AMI_EMBED_BATCH", 10 if EMBED_BACKEND == "openai" else 64)
 EMBED_API_KEY = _env("AMI_EMBED_API_KEY") or _env("DASHSCOPE_API_KEY")
 EMBED_BASE_URL = _env("AMI_EMBED_BASE_URL")
 EMBED_DIMENSIONS = _int("AMI_EMBED_DIMENSIONS", 1024)
-EMBED_TIMEOUT = _float("AMI_EMBED_TIMEOUT", 25.0)
+# Per-attempt timeout, retries per batch, and the process-wide cap on
+# text-embedding-v4 requests in flight. 40 s / 16 from rc4 (user decision after
+# the lead smoke: provider tail latency produced 20 s timeouts at every
+# concurrency including 4, and 16 gave 3.0-4.6x the throughput of 4 with no
+# 429; bench/results/lead_smoke_time_20261005.md). Every attempt is clipped to
+# the request's deadline (AMI_ADD_DEADLINE / AMI_SEARCH_DEADLINE below), so a
+# longer timeout cannot push a request past the edge.
+EMBED_TIMEOUT = _float("AMI_EMBED_TIMEOUT", 40.0)
 EMBED_RETRIES = _int("AMI_EMBED_RETRIES", 1)
-EMBED_CONCURRENCY = _int("AMI_EMBED_CONCURRENCY", 8)
+EMBED_CONCURRENCY = _int("AMI_EMBED_CONCURRENCY", 16)
 
 # --- LLM (competition rule: must be gpt-4o-mini for a leaderboard run) --------
 LLM_MODEL = _env("AMI_LLM_MODEL", "gpt-4o-mini")
@@ -85,6 +92,13 @@ LLM_MAX_TOKENS_EXTRACT_DATED = _int("AMI_LLM_MAX_TOKENS_EXTRACT_DATED", 1600)
 # Feature switches: with no API key both fall back to the raw-text-only path.
 EXTRACT_ENABLED = _env("AMI_EXTRACT", "1") != "0"
 RECALL_QUERY_ENABLED = _env("AMI_RECALL_QUERY", "1") != "0"
+# Zero-fact fallback (lead L5, P2; bench/results/zero_fact_fallback_preregistration.md).
+# A chunk the extraction prompt returns no facts for (narration, a document, a
+# table sent as messages) is read again by a third-person content prompt. One
+# extra gpt-4o-mini call for such a chunk only; every other chunk is extracted
+# exactly as before. Off.
+EXTRACT_FALLBACK = _env("AMI_EXTRACT_FALLBACK", "0") != "0"
+LLM_MAX_TOKENS_EXTRACT_FALLBACK = _int("AMI_LLM_MAX_TOKENS_EXTRACT_FALLBACK", 2400)
 # Local reasoning models (Qwen3, etc.): inject <<DISABLE_THINKING>> into the system
 # message so the gateway's thinking.jinja pre-fills a closed <think> tag. vLLM drops
 # chat_template_kwargs, so this secret-code workaround is the only reliable path.
@@ -98,6 +112,23 @@ RECALL_WEIGHT = _float("AMI_RECALL_WEIGHT", 0.5)
 # contexts dilute the fixed answer model, so the returned set is bounded.
 RETURN_LIMIT = _int("AMI_RETURN_LIMIT", 100)
 RETURN_CHAR_BUDGET = _int("AMI_RETURN_CHAR_BUDGET", 400000)
+# Token budget for the returned set (app/tokens.py), on top of the character
+# budget. The platform's Answer window is 128,000 tokens less 8,192 output and
+# 2,048 safety = 117,760 input tokens, shared by the instructions, the question
+# with its options, and the returned memories; Answer keeps a token-counted
+# prefix of what does not fit. Per Search the memories get
+#   (ANSWER_INPUT_TOKENS - ANSWER_PROMPT_TOKENS) / TOKEN_SAFETY - tokens(query + options)
+# and each memory costs tokens(content) + ANSWER_ITEM_TOKENS. The largest
+# platform answer template measured is ScriptMem's CHOICE_ANSWER_TEMPLATE at
+# ~430 o200k tokens; 1,024 leaves room for chat framing and an instruction
+# block we have not seen. ANSWER_ITEM_TOKENS covers "- [<ISO timestamp>] " and
+# a newline (17 tokens measured). TOKEN_SAFETY 1.15 covers the tokenizer
+# mismatch measured in bench/results/token_budget_20261006.md.
+ANSWER_INPUT_TOKENS = _int("AMI_ANSWER_INPUT_TOKENS", 117_760)
+ANSWER_PROMPT_TOKENS = _int("AMI_ANSWER_PROMPT_TOKENS", 1024)
+ANSWER_ITEM_TOKENS = _int("AMI_ANSWER_ITEM_TOKENS", 20)
+TOKEN_SAFETY = _float("AMI_TOKEN_SAFETY", 1.15)
+TOKEN_ENCODING = _env("AMI_TOKEN_ENCODING", "o200k_base")
 # Agentic search: after the first retrieval, gpt-4o-mini checks whether the
 # evidence is complete and may fire a second targeted recall question. Each
 # round costs one extra LLM call + one extra embed pass.
@@ -193,6 +224,17 @@ FACT_SELECT = _env("AMI_FACT_SELECT", "0") != "0"
 # delivery unit, not the quality of selection, so no ranking change recovers
 # it. See bench/results/lme_chunk_memory.md.
 CHUNK_MEMORY = _env("AMI_CHUNK_MEMORY", "0") != "0"
+# Adaptive chunk delivery (lead L4, bench/results/adaptive_chunk_preregistration.md).
+# A selected verbatim turn is delivered as its whole Add chunk -- the chunk's
+# turns, verbatim, in order, joined into one memory -- when that chunk is at most
+# AMI_ADAPTIVE_CHUNK characters; otherwise as the turn and its neighbours within
+# AMI_WINDOW_RADIUS, added while the span stays within that size, overlapping or
+# touching spans of one chunk merged into one memory. Facts are delivered as
+# they are. The returned text is capped at AMI_ADAPTIVE_CHUNK_TOTAL characters
+# (and always by the token budget). A turn withheld by an update or as-of rule is
+# left out of the chunk or span text. Nothing is rewritten. 0 = off.
+ADAPTIVE_CHUNK = _int("AMI_ADAPTIVE_CHUNK", 0)
+ADAPTIVE_CHUNK_TOTAL = _int("AMI_ADAPTIVE_CHUNK_TOTAL", 120_000)
 
 # Ask the model when each returned memory's event actually happened, then do
 # the arithmetic in code.
@@ -304,6 +346,22 @@ LLM_MAX_TOKENS_VERIFY = _int("AMI_LLM_MAX_TOKENS_VERIFY", 400)
 UPDATE_VERSION = _int("AMI_UPDATE_VERSION", 7)
 LLM_MAX_TOKENS_INTENT = _int("AMI_LLM_MAX_TOKENS_INTENT", 500)
 
+# As-of evidence selection (lead L1, app/asof.py,
+# bench/results/asof_selection_preregistration.md). For a question that asks
+# for a state at a stated date, returned items not valid at that date (an
+# explicit date range that misses it; said after it without naming a year) are
+# withheld and their slots refilled from the ranking. gpt-4o-mini decides
+# whether the question is such a question, one call per distinct question,
+# only when the rules would change the returned set. Membership only. Off.
+ASOF_SELECT = _env("AMI_ASOF_SELECT", "0") != "0"
+# Candidates the rules are applied to: the top of the ranking plus whatever
+# the returned set carries (window neighbours).
+ASOF_POOL = _int("AMI_ASOF_POOL", 400)
+# An item said up to this many days after the as-of period that uses
+# relative-time wording ("yesterday", "上周") is kept: it describes the period.
+ASOF_GRACE_DAYS = _int("AMI_ASOF_GRACE_DAYS", 31)
+LLM_MAX_TOKENS_ASOF = _int("AMI_LLM_MAX_TOKENS_ASOF", 80)
+
 # --- direct corpus interaction ------------------------------------------------
 # Replace the embedding selection with a gpt-4o-mini agent that greps and reads
 # the user's stored turns and facts, then names the memory ids to return. The
@@ -368,6 +426,13 @@ CACHE_MAX_ITEMS = _int("AMI_CACHE_MAX_ITEMS", 1_000_000)
 # rejected Add persisted nothing and its retry is an ordinary first attempt.
 # 0 = off (the request waits for a worker thread, as before).
 ADD_MAX_INFLIGHT = _int("AMI_ADD_MAX_INFLIGHT", 0)
+# Wall-clock deadline per request, from its arrival at the app (admission wait
+# included), for all its upstream calls (app/deadline.py). An upstream call the
+# deadline leaves no time for is not made and the request is answered 503 +
+# Retry-After before anything is persisted. 85 s keeps a request inside the
+# ~100 s edge cut with room to persist and respond. 0 = no deadline.
+ADD_DEADLINE = _float("AMI_ADD_DEADLINE", 85.0)
+SEARCH_DEADLINE = _float("AMI_SEARCH_DEADLINE", 85.0)
 SEARCH_MAX_INFLIGHT = _int("AMI_SEARCH_MAX_INFLIGHT", 0)
 ADMISSION_WAIT = _float("AMI_ADMISSION_WAIT", 30.0)
 RETRY_AFTER = _int("AMI_RETRY_AFTER", 10)

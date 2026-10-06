@@ -58,7 +58,8 @@ class EmbedAPITests(unittest.TestCase):
         fake = self.use_client(FakeClient())
         texts = ['a' if index % 2 == 0 else 'b' for index in range(23)]
         vectors = embed.encode(texts)
-        self.assertEqual([len(call['input']) for call in fake.calls], [10, 10, 3])
+        # Batches run side by side (rc4), so they may reach the provider in any order.
+        self.assertEqual(sorted((len(call['input']) for call in fake.calls), reverse=True), [10, 10, 3])
         self.assertEqual(vectors.shape, (23, 64))
         self.assertEqual(vectors.dtype, np.float32)
         np.testing.assert_allclose(np.linalg.norm(vectors, axis=1), 1.0)
@@ -97,7 +98,9 @@ class EmbedAPITests(unittest.TestCase):
         self.assertEqual(kwargs['api_key'], 'embedding-test-key')
         self.assertEqual(kwargs['base_url'], 'https://embed.example/v1')
         self.assertEqual(kwargs['timeout'], 25.0)
-        self.assertEqual(kwargs['max_retries'], 1)
+        # rc4: the SDK makes no retries of its own; deadline.call makes
+        # AMI_EMBED_RETRIES of them, each clipped to the request deadline.
+        self.assertEqual(kwargs['max_retries'], 0)
         with patch.object(config, 'EMBED_API_KEY', ''):
             with self.assertRaisesRegex(ValueError, 'AMI_EMBED_API_KEY'):
                 embed.encode(['a'])

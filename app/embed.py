@@ -7,13 +7,15 @@ Stored source text is never truncated or rewritten by this embedding transform.
 """
 from __future__ import annotations
 
+import concurrent.futures
+import contextvars
 import math
 import threading
 from urllib.parse import urlsplit, urlunsplit
 
 import numpy as np
 
-from . import config
+from . import config, deadline, llm
 
 _model = None
 _lock = threading.Lock()
@@ -100,8 +102,10 @@ def _get_remote_client():
         if _client is None or settings != _client_settings:
             from openai import OpenAI
 
+            # max_retries=0: retries are made by deadline.call, which can see
+            # the request's deadline (AMI_EMBED_RETRIES is still the count).
             _client = OpenAI(api_key=config.EMBED_API_KEY, base_url=base_url,
-                             timeout=config.EMBED_TIMEOUT, max_retries=config.EMBED_RETRIES)
+                             timeout=config.EMBED_TIMEOUT, max_retries=0)
             _remote_gate = threading.BoundedSemaphore(config.EMBED_CONCURRENCY)
             _client_settings = settings
         return _client, _remote_gate
@@ -139,10 +143,16 @@ def _normalized(vector, dimensions: int) -> np.ndarray:
 
 
 def _remote_batch(client, gate, payload: list[str]) -> list[np.ndarray]:
-    with gate:
-        response = client.embeddings.create(
-            model=config.EMBED_MODEL, input=list(payload), dimensions=config.EMBED_DIMENSIONS,
-            encoding_format="float")
+    def attempt():
+        deadline.acquire(gate)
+        try:
+            return client.embeddings.create(
+                model=config.EMBED_MODEL, input=list(payload), dimensions=config.EMBED_DIMENSIONS,
+                encoding_format="float", timeout=deadline.clip(config.EMBED_TIMEOUT))
+        finally:
+            gate.release()
+
+    response = deadline.call(attempt, config.EMBED_RETRIES, llm.retryable, llm.retry_after)
     data = getattr(response, "data", None)
     if not isinstance(data, list) or len(data) != len(payload):
         raise ValueError("Remote embedding response does not cover every input")
@@ -157,23 +167,31 @@ def _remote_batch(client, gate, payload: list[str]) -> list[np.ndarray]:
     return vectors
 
 
+# Batches of one call run side by side (each still takes a slot of the shared
+# AMI_EMBED_CONCURRENCY gate), so an Add's wall time is its slowest batch, not
+# the sum of its batches. Sized so that waiting for a gate slot, never a
+# worker thread, is what bounds the fan-out.
+_batch_pool: concurrent.futures.ThreadPoolExecutor | None = None
+_batch_pool_lock = threading.Lock()
+
+
+def _pool() -> concurrent.futures.ThreadPoolExecutor:
+    global _batch_pool
+    with _batch_pool_lock:
+        if _batch_pool is None:
+            _batch_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=max(8, 4 * config.EMBED_CONCURRENCY), thread_name_prefix="embed")
+        return _batch_pool
+
+
 def _encode_remote(texts: list[str]) -> np.ndarray:
     _remote_config()
     if not texts:
         return np.zeros((0, config.EMBED_DIMENSIONS), dtype=np.float32)
     chunks = [_chunks(text) for text in texts]  # Validate all before any request.
     client, gate = _get_remote_client()
-    # Stream batches across text boundaries, retaining bounded chunk vectors.
-    pooled = np.zeros((len(texts), config.EMBED_DIMENSIONS), dtype=np.float64)
+    batches: list[tuple[list[str], list[int], list[float]]] = []
     payload, owners, weights = [], [], []
-
-    def flush():
-        for owner, weight, vector in zip(owners, weights, _remote_batch(client, gate, payload)):
-            pooled[owner] += weight * vector.astype(np.float64)
-        payload.clear()
-        owners.clear()
-        weights.clear()
-
     for owner, parts in enumerate(chunks):
         total_bytes = sum(len(part.encode("utf-8")) for part in parts)
         for part in parts:
@@ -181,9 +199,25 @@ def _encode_remote(texts: list[str]) -> np.ndarray:
             owners.append(owner)
             weights.append(len(part.encode("utf-8")) / total_bytes)
             if len(payload) == config.EMBED_BATCH:
-                flush()
+                batches.append((payload, owners, weights))
+                payload, owners, weights = [], [], []
     if payload:
-        flush()
+        batches.append((payload, owners, weights))
+    if len(batches) == 1:
+        results = [_remote_batch(client, gate, batches[0][0])]
+    else:
+        futures = [_pool().submit(contextvars.copy_context().run, _remote_batch, client, gate, batch[0])
+                   for batch in batches]
+        try:
+            results = [future.result() for future in futures]
+        except BaseException:
+            for future in futures:
+                future.cancel()  # batches not yet started; the call has failed
+            raise
+    pooled = np.zeros((len(texts), config.EMBED_DIMENSIONS), dtype=np.float64)
+    for (_, batch_owners, batch_weights), vectors in zip(batches, results):
+        for owner, weight, vector in zip(batch_owners, batch_weights, vectors):
+            pooled[owner] += weight * vector.astype(np.float64)
     return np.stack([_normalized(vector, config.EMBED_DIMENSIONS) for vector in pooled])
 
 

@@ -13,11 +13,11 @@ import threading
 import time
 
 import numpy as np
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import config, dci, embed, llm, rerank, store, updates
+from . import asof, config, dci, deadline, embed, llm, rerank, store, tokens, updates
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("ami")
@@ -48,7 +48,7 @@ def record(kind: str, **fields) -> None:
 
 # --- admission valve ---------------------------------------------------------
 valve_counters = {"add_admitted": 0, "add_rejected": 0, "search_admitted": 0, "search_rejected": 0,
-                  "upstream_429": 0, "upstream_503": 0}
+                  "upstream_429": 0, "upstream_503": 0, "deadline_503": 0}
 
 
 def _limit(path: str | None) -> int:
@@ -74,16 +74,20 @@ class AdmissionValve:
 
     async def __call__(self, scope, receive, send):
         path = scope.get("path") if scope["type"] == "http" and scope.get("method") == "POST" else None
+        if path is not None:
+            # The request deadline (app/deadline.py) counts from here, so time
+            # spent waiting for admission is part of it.
+            scope["ami_arrival"] = time.monotonic()
         limit = _limit(path)
         if limit <= 0:
             await self.app(scope, receive, send)
             return
         queue, ticket = self.queues[path], next(self.tickets)
-        deadline = time.monotonic() + config.ADMISSION_WAIT
+        admit_by = time.monotonic() + config.ADMISSION_WAIT
         queue.append(ticket)
         try:
             while not (queue[0] == ticket and self.inflight[path] < limit):
-                if time.monotonic() >= deadline:
+                if time.monotonic() >= admit_by:
                     valve_counters[f"{path[1:]}_rejected"] += 1
                     await _overloaded(send, config.RETRY_AFTER)
                     return
@@ -121,6 +125,15 @@ async def upstream_unavailable(_request, exc: llm.UpstreamUnavailable) -> JSONRe
     """
     valve_counters[f"upstream_{exc.status}"] += 1
     return JSONResponse({"detail": {"reason": exc.reason}}, status_code=exc.status,
+                        headers={"Retry-After": str(exc.retry_after)})
+
+
+@app.exception_handler(deadline.DeadlineExceeded)
+async def deadline_exceeded(_request, exc: deadline.DeadlineExceeded) -> JSONResponse:
+    """503 + Retry-After: the request's deadline left no time for an upstream
+    call. Raised before persistence, like UpstreamUnavailable."""
+    valve_counters["deadline_503"] += 1
+    return JSONResponse({"detail": {"reason": exc.reason}}, status_code=503,
                         headers={"Retry-After": str(exc.retry_after)})
 
 
@@ -469,20 +482,42 @@ def order(chosen: list[tuple[store.Item, float]]) -> None:
         ))
 
 
+# Consecutive candidates skipped for not fitting the token budget before the
+# scan stops: past this, the remaining budget is smaller than what the ranking
+# is turning up, and walking a large user's whole store finds nothing.
+TOKEN_MISSES = 50
+
+
 def select(index: store.UserIndex, scores: np.ndarray, top_k: int,
            limit_override: int | None = None, exclude: set[str] | None = None,
            budget_override: int | None = None,
-           withheld: set[str] | None = None) -> list[tuple[store.Item, float]]:
+           withheld: set[str] | None = None,
+           token_budget: int | None = None) -> list[tuple[store.Item, float]]:
+    """The returned set, in delivery order.
+
+    Bounded three ways: at most *limit* memories (top_k, AMI_RETURN_LIMIT),
+    at most the character budget, and at most *token_budget* counted tokens
+    (app/tokens.py; default: the whole Answer window with an empty query). A
+    memory that does not fit the token budget is skipped, never cut, and the
+    first memory gets no exception: the token budget is never exceeded.
+    """
     limit = min(top_k, config.RETURN_LIMIT) if limit_override is None else limit_override
     chosen: list[tuple[store.Item, float]] = []
     seen: set[str] = set(exclude or ())
     budget = config.RETURN_CHAR_BUDGET if budget_override is None else budget_override
-    if limit <= 0 or budget <= 0:
+    tokens_left = tokens.memory_budget() if token_budget is None else token_budget
+    if limit <= 0 or budget <= 0 or tokens_left <= 0:
         return chosen
+    if config.ADAPTIVE_CHUNK > 0 and not config.CHUNK_MEMORY:
+        chosen = select_adaptive(index, scores, limit, seen,
+                                 min(budget, config.ADAPTIVE_CHUNK_TOTAL), tokens_left, withheld or set())
+        order(chosen)
+        return chosen
+    misses = 0
 
     def take(item: store.Item, score: float) -> bool:
         """Append one memory if it is new and affordable. True when full."""
-        nonlocal budget
+        nonlocal budget, tokens_left, misses
         if withheld and item.id in withheld:
             return False
         key = content_key(item)
@@ -490,10 +525,16 @@ def select(index: store.UserIndex, scores: np.ndarray, top_k: int,
             return False
         if len(item.content) > budget and chosen:
             return False
+        cost = tokens.item_cost(item.content)
+        if cost > tokens_left:
+            misses += 1
+            return misses >= TOKEN_MISSES
+        misses = 0
         seen.add(key)
         budget -= len(item.content)
+        tokens_left -= cost
         chosen.append((item, score))
-        return len(chosen) >= limit or budget <= 0
+        return len(chosen) >= limit or budget <= 0 or tokens_left <= config.ANSWER_ITEM_TOKENS
 
     for position in np.argsort(-scores):
         item = index.items[int(position)]
@@ -526,6 +567,116 @@ def select(index: store.UserIndex, scores: np.ndarray, top_k: int,
     # verbatim turn is the primary source while a fact is a lossy paraphrase.
     order(chosen)
     return chosen
+
+
+def select_adaptive(index: store.UserIndex, scores: np.ndarray, limit: int, seen: set[str],
+                    budget: int, tokens_left: int, withheld: set[str]) -> list[tuple[store.Item, float]]:
+    """AMI_ADAPTIVE_CHUNK delivery, in relevance order (the caller orders).
+
+    A verbatim hit becomes its whole Add chunk when the chunk's text is at most
+    S = AMI_ADAPTIVE_CHUNK characters, else a span: the hit turn (always whole)
+    and its neighbours within AMI_WINDOW_RADIUS, each added only while the span
+    stays within S. A span that overlaps or touches an already chosen span of
+    the same chunk is merged into it, in that span's place. Facts are taken as
+    they are. Withheld turns are never part of a chunk or span: a chunk is the
+    stored turns that remain, concatenated in order. Each memory costs one slot.
+    """
+    items = index.items
+    radius = max(0, config.WINDOW_RADIUS)
+    size = config.ADAPTIVE_CHUNK
+    mems: list[dict] = []
+    whole: set[str] = set()
+    misses = 0
+
+    def text(rows: list[int]) -> str:
+        return "\n".join(items[row].content for row in rows)
+
+    def span_rows(digest: str, positions) -> list[int]:
+        rows = [index.by_id.get(f"{digest}-r{p}") for p in sorted(positions)]
+        return [row for row in rows if row is not None and items[row].id not in withheld]
+
+    for position in np.argsort(-scores):
+        item = items[int(position)]
+        score = float(scores[int(position)])
+        if score == float("-inf"):
+            break
+        if item.id in withheld:
+            continue
+        match = RAW_ID.match(item.id) if item.kind == "raw" else None
+        replaced: list[dict] = []
+        if match:
+            digest, hit = match.group(1), int(match.group(2))
+            if digest in whole:
+                continue
+            rows = [row for row in index.by_chunk.get(digest, []) if items[row].id not in withheld]
+            content = text(rows)
+            if rows and len(content) <= size:
+                entry = {"kind": "chunk", "digest": digest, "rows": rows}
+            else:
+                positions, length = {hit}, len(item.content)
+                for offset in range(1, radius + 1):
+                    for other, inner in ((hit - offset, hit - offset + 1), (hit + offset, hit + offset - 1)):
+                        row = index.by_id.get(f"{digest}-r{other}")
+                        # Contiguous only: a turn joins when the one between it
+                        # and the hit has joined.
+                        if row is None or items[row].id in withheld or inner not in positions:
+                            continue
+                        if length + 1 + len(items[row].content) <= size:
+                            positions.add(other)
+                            length += 1 + len(items[row].content)
+                low, high = min(positions), max(positions)
+                replaced = [m for m in mems if m["kind"] == "span" and m["digest"] == digest
+                            and min(m["positions"]) - 1 <= high and low <= max(m["positions"]) + 1]
+                for m in replaced:
+                    positions |= m["positions"]
+                rows = span_rows(digest, positions)
+                content = text(rows)
+                entry = {"kind": "span", "digest": digest, "rows": rows, "positions": positions}
+        else:
+            content = item.content
+            entry = {"kind": "item", "item": item}
+        key = content_key(store.Item(id="", kind="", parent_id=None, content=content, created_at=None))
+        if key in seen and not replaced:
+            continue
+        cost = tokens.item_cost(content)
+        delta_chars = len(content) - sum(len(m["content"]) for m in replaced)
+        delta_tokens = cost - sum(m["cost"] for m in replaced)
+        if replaced and delta_chars <= 0:
+            continue
+        if (delta_chars > budget and mems) or delta_tokens > tokens_left:
+            misses += 1
+            if misses >= TOKEN_MISSES:
+                break
+            continue
+        misses = 0
+        entry.update(content=content, cost=cost, score=score)
+        seen.add(key)
+        budget -= delta_chars
+        tokens_left -= delta_tokens
+        if replaced:
+            place = mems.index(replaced[0])
+            entry["score"] = replaced[0]["score"]
+            mems[place] = entry
+            for m in replaced[1:]:
+                mems.remove(m)
+        else:
+            mems.append(entry)
+        if entry["kind"] == "chunk":
+            whole.add(entry["digest"])
+        if len(mems) >= limit or budget <= 0 or tokens_left <= config.ANSWER_ITEM_TOKENS:
+            break
+
+    out: list[tuple[store.Item, float]] = []
+    for m in mems:
+        if m["kind"] == "item":
+            out.append((m["item"], m["score"]))
+            continue
+        rows = m["rows"]
+        ident = (f"{m['digest']}-c0" if m["kind"] == "chunk"
+                 else f"{m['digest']}-s{min(m['positions'])}-{max(m['positions'])}")
+        out.append((store.Item(id=ident, kind="chunk", parent_id=None, content=m["content"],
+                               created_at=items[rows[0]].created_at), m["score"]))
+    return out
 
 
 # --- endpoints ---------------------------------------------------------------
@@ -565,6 +716,12 @@ def startup() -> None:
         config.CACHE_MAX_ITEMS,
         config.EMBED_THREADS,
     )
+    log.info("budget: answer_input=%d prompt=%d item=%d safety=%.2f counter=%s; deadlines add=%.0fs search=%.0fs; "
+             "embed timeout=%.0fs retries=%d concurrency=%d; adaptive_chunk=%d/%d",
+             config.ANSWER_INPUT_TOKENS, config.ANSWER_PROMPT_TOKENS, config.ANSWER_ITEM_TOKENS,
+             config.TOKEN_SAFETY, tokens.backend(), config.ADD_DEADLINE, config.SEARCH_DEADLINE,
+             config.EMBED_TIMEOUT, config.EMBED_RETRIES, config.EMBED_CONCURRENCY,
+             config.ADAPTIVE_CHUNK, config.ADAPTIVE_CHUNK_TOTAL)
 
 
 @app.get("/health")
@@ -582,6 +739,7 @@ def health(
     counters = dict(llm.counters)
     counters.update({f"dci_{key}": value for key, value in dci.counters.items()})
     counters.update({f"valve_{key}": value for key, value in valve_counters.items()})
+    counters.update({f"asof_{key}": value for key, value in asof.stats.items()})
     calls, failures = counters["calls"], counters["failures"]
     # "llm: true" only says a key is configured. A key that 401s on every call
     # reported healthy right through a quota outage, so say so out loud.
@@ -599,10 +757,12 @@ def add(
     request: AddRequest,
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None),
+    http: Request = None,
 ) -> AddResponse:
     check_auth(authorization, x_api_key)
     note_extra("add", request, *request.messages)
     started = time.monotonic()
+    deadline.start(config.ADD_DEADLINE, http.scope.get("ami_arrival") if http is not None else None)
     echo = AddResponse(
         success=True,
         request_id=request.request_id,
@@ -693,10 +853,12 @@ def search(
     request: SearchRequest,
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None),
+    http: Request = None,
 ) -> dict:
     check_auth(authorization, x_api_key)
     note_extra("search", request)
     started = time.monotonic()
+    deadline.start(config.SEARCH_DEADLINE, http.scope.get("ami_arrival") if http is not None else None)
     result = _search(request)
     if config.REQUEST_LOG:
         data = result["data"]
@@ -716,6 +878,11 @@ def _search(request: SearchRequest) -> dict:
     index = store.get(request.user_id)
     if index.matrix is None or not index.items:
         return {"data": []}
+    # Counted tokens this Search's memories may use in the Answer window,
+    # after the question and its options (app/tokens.py).
+    token_budget = tokens.memory_budget(request.query, request.options)
+    if token_budget <= config.ANSWER_ITEM_TOKENS:
+        return {"data": []}
 
     # Round 1: standard fused retrieval. With slots reserved for a second round
     # it takes fewer, so the second round is not competing for the same places.
@@ -734,13 +901,24 @@ def _search(request: SearchRequest) -> dict:
         # Ask whether the question needs the old value only when withholding
         # would change what is returned; otherwise it is a no-op anyway.
         trial = select(index, scores1, request.top_k,
-                       limit_override=min(request.top_k, config.RETURN_LIMIT) - reserved if reserved else None)
+                       limit_override=min(request.top_k, config.RETURN_LIMIT) - reserved if reserved else None,
+                       token_budget=token_budget)
         if not any(item.id in withheld for item, _ in trial) or \
                 updates.question_protected(request.query, request.options):
             withheld = set()
+    if config.ASOF_SELECT and asof.candidate(request.query) is not None:
+        # Items not valid at the question's as-of date (app/asof.py), judged
+        # against the set that would otherwise be returned; withheld slots are
+        # refilled from the ranking by the selection below.
+        returned = select(index, scores1, request.top_k,
+                          limit_override=min(request.top_k, config.RETURN_LIMIT) - reserved if reserved else None,
+                          withheld=withheld, token_budget=token_budget)
+        withheld = withheld | asof.select_withheld(
+            index, scores1, request.query, request.options,
+            [turn for item, _ in returned for turn in asof.constituents(index, item)])
     chosen1 = select(index, scores1, request.top_k,
                      limit_override=min(request.top_k, config.RETURN_LIMIT) - reserved if reserved else None,
-                     withheld=withheld)
+                     withheld=withheld, token_budget=token_budget)
 
     if reserved:
         reflection = llm.reflect_gap(request.query, request.options,
@@ -758,7 +936,9 @@ def _search(request: SearchRequest) -> dict:
                               limit_override=reserved,
                               exclude={content_key(item) for item, _ in chosen1},
                               budget_override=config.RETURN_CHAR_BUDGET - spent,
-                              withheld=withheld)
+                              withheld=withheld,
+                              token_budget=token_budget - sum(tokens.item_cost(item.content)
+                                                              for item, _ in chosen1))
             order(chosen1)
 
     # Agentic round: reflect → maybe a second retrieval
@@ -781,7 +961,8 @@ def _search(request: SearchRequest) -> dict:
                 # Element-wise max, not mean: the second question exists to
                 # reach evidence the first one missed, and averaging would
                 # dilute exactly those items back below the cut.
-                chosen1 = select(index, np.maximum(scores1, scores2), request.top_k, withheld=withheld)
+                chosen1 = select(index, np.maximum(scores1, scores2), request.top_k, withheld=withheld,
+                                 token_budget=token_budget)
 
     # Direct corpus interaction: an agent greps and reads the store and names
     # the ids to return. It replaces the selection above (arm `dci`) or leads
@@ -800,7 +981,9 @@ def _search(request: SearchRequest) -> dict:
                               limit_override=limit - len(agent),
                               exclude={content_key(item) for item, _ in agent},
                               budget_override=config.RETURN_CHAR_BUDGET - spent,
-                              withheld=withheld)
+                              withheld=withheld,
+                              token_budget=token_budget - sum(tokens.item_cost(item.content)
+                                                              for item, _ in agent))
                 order(fill)
                 chosen1 = agent + fill
             else:
@@ -821,4 +1004,8 @@ def _search(request: SearchRequest) -> dict:
         }
         for item, score in chosen1
     ]
-    return {"data": data}
+    # Every path above is bounded by the token budget; this is the guarantee
+    # for what is re-rendered on the way out (event dates, supersession marks)
+    # and for the agent's own picks. The returned order is kept and only a
+    # tail that would not fit is dropped -- what Answer would drop anyway.
+    return {"data": data[: tokens.fit([d["content"] for d in data], token_budget)]}

@@ -19,6 +19,12 @@ RUN pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
+# Bake tiktoken's o200k_base encoding too: the token-aware return budget
+# (app/tokens.py) counts with it, and the container must not need the network
+# to load it. Without it the service falls back to a conservative estimate.
+ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken
+RUN python -c "import tiktoken; tiktoken.get_encoding('o200k_base')"
+
 # Bake the embedding weights into the image so the container needs no network
 # for retrieval at evaluation time.
 RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('BAAI/bge-small-en-v1.5')"

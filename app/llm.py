@@ -12,7 +12,7 @@ import logging
 import re
 import threading
 
-from . import config
+from . import config, deadline
 
 log = logging.getLogger("ami.llm")
 
@@ -44,6 +44,21 @@ EXTRACT_KEYED_SYSTEM = EXTRACT_SYSTEM.replace(
     'Return JSON only: {"facts": [{"text": "...", "key": "me.team_size"}, {"text": "...", "key": null}]}. At most %d facts. Return {"facts": []} if there is nothing worth remembering.',
 )
 assert EXTRACT_KEYED_SYSTEM != EXTRACT_SYSTEM
+
+# AMI_EXTRACT_FALLBACK (lead L5, P2): the shipped prompt runs first, unchanged;
+# only a chunk it returns no facts for is read again with this content prompt.
+EXTRACT_CONTENT_SYSTEM = """You turn a chunk of content into atomic memories for a memory index. The chunk may be a script, play, story or transcript (lines of named characters, narration, scene descriptions, stage directions), or a document, article, report, table, data listing, manual, or a set of rules or instructions, even when it arrives as a user's messages.
+
+Rules:
+1. One fact per line. Each memory must stand alone: no pronouns without a named referent, no "the above", no cross-references.
+2. Keep every specific name, place, title, number, unit, quantity and date exactly as written. Never generalise.
+3. Write in the third person with the names given: who said or did what, to whom, where, and the reason or feeling if stated; what a scene description or stage direction shows (the setting, who is present, what they do).
+4. Tables and data listings: one memory per row or record, naming each column with its value.
+5. Rules, definitions, steps and requirements: one memory each, with their exact numbers and conditions.
+6. If the text carries a date, start the memory with that date in brackets.
+7. Do not answer questions, summarise, or editorialise. No commentary.
+
+Return JSON only: {"facts": ["...", "..."]}. At most %d facts. Return {"facts": []} only if the chunk has no content at all."""
 
 RECALL_SYSTEM = """You write the memory-check question a person would ask their assistant about their own past conversations.
 
@@ -77,7 +92,9 @@ def _get_client():
                     api_key=config.LLM_API_KEY,
                     base_url=config.LLM_BASE_URL,
                     timeout=config.LLM_TIMEOUT,
-                    max_retries=config.LLM_RETRIES,
+                    # Retries are made by deadline.call, which can see the
+                    # request's deadline; the SDK's own would not.
+                    max_retries=0,
                 )
     return _client
 
@@ -106,23 +123,66 @@ def transient(exc: Exception) -> UpstreamUnavailable | None:
         import openai
     except ImportError:  # pragma: no cover - the service always has the SDK
         return None
-    if isinstance(exc, openai.RateLimitError):
+
+    def kind(*names: str) -> tuple:
+        # getattr: a test may stand a bare namespace in for the SDK module.
+        return tuple(cls for cls in (getattr(openai, name, None) for name in names) if isinstance(cls, type))
+
+    if isinstance(exc, kind("RateLimitError")):
         wait = config.RETRY_AFTER
         try:
             wait = int(float(exc.response.headers.get("retry-after", wait)))
         except (AttributeError, TypeError, ValueError):
             pass
         return UpstreamUnavailable(429, max(1, min(60, wait)), "upstream rate limit")
-    if isinstance(exc, (openai.APITimeoutError, openai.APIConnectionError)):
+    if isinstance(exc, kind("APITimeoutError", "APIConnectionError")):
         return UpstreamUnavailable(503, config.RETRY_AFTER, "upstream unavailable")
-    if isinstance(exc, openai.APIStatusError) and exc.status_code >= 500:
+    if isinstance(exc, kind("APIStatusError")) and exc.status_code >= 500:
         return UpstreamUnavailable(503, config.RETRY_AFTER, "upstream unavailable")
     return None
 
 
+def retryable(exc: Exception) -> bool:
+    """What the OpenAI SDK itself retries: rate limits, timeouts, connection
+    errors, 408/409 and 5xx."""
+    if transient(exc) is not None:
+        return True
+    status = getattr(exc, "status_code", None)
+    return status in (408, 409)
+
+
+def retry_after(exc: Exception) -> float | None:
+    """The provider's requested wait, when it sends one."""
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    if not headers:
+        return None
+    try:
+        if headers.get("retry-after-ms") is not None:
+            return float(headers.get("retry-after-ms")) / 1000.0
+        if headers.get("retry-after") is not None:
+            return float(headers.get("retry-after"))
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _create(**kwargs):
+    """One chat completion with deadline-aware retries."""
+    def attempt():
+        deadline.acquire(_gate)
+        try:
+            return _get_client().chat.completions.create(
+                **kwargs, timeout=deadline.clip(config.LLM_TIMEOUT))
+        finally:
+            _gate.release()
+    return deadline.call(attempt, config.LLM_RETRIES, retryable, retry_after)
+
+
 def _complete(system: str, user: str, max_tokens: int, strict: bool = False) -> str | None:
     """One chat completion; None on any failure, unless *strict* and the
-    failure is transient, in which case UpstreamUnavailable is raised."""
+    failure is transient, in which case UpstreamUnavailable is raised. A call
+    the request's deadline leaves no time for raises deadline.DeadlineExceeded
+    either way: the request cannot complete, and nothing has been persisted."""
     if not config.llm_available():
         return None
     # Gateway secret code: <<DISABLE_THINKING>> in the system message tells the
@@ -132,14 +192,16 @@ def _complete(system: str, user: str, max_tokens: int, strict: bool = False) -> 
         system = "<<DISABLE_THINKING>>\n" + system
     counters["calls"] += 1
     try:
-        with _gate:
-            response = _get_client().chat.completions.create(
-                model=config.LLM_MODEL,
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-                temperature=0,
-                max_tokens=max_tokens,
-            )
+        response = _create(
+            model=config.LLM_MODEL,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            temperature=0,
+            max_tokens=max_tokens,
+        )
         return _strip_reasoning(response.choices[0].message.content or "")
+    except deadline.DeadlineExceeded:
+        counters["failures"] += 1
+        raise
     except Exception as exc:  # network, quota, provider error — degrade, never fail Add
         counters["failures"] += 1
         log.warning("llm call failed: %s", exc)
@@ -158,21 +220,23 @@ def chat_tools(messages: list[dict], tools: list[dict], max_tokens: int,
         return None
     counters["calls"] += 1
     try:
-        with _gate:
-            response = _get_client().chat.completions.create(
-                model=config.LLM_MODEL,
-                messages=messages,
-                tools=tools,
-                tool_choice=tool_choice or "auto",
-                temperature=0,
-                max_tokens=max_tokens,
-            )
+        response = _create(
+            model=config.LLM_MODEL,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice or "auto",
+            temperature=0,
+            max_tokens=max_tokens,
+        )
         message = response.choices[0].message
         calls = []
         for call in message.tool_calls or []:
             calls.append({"id": call.id, "name": call.function.name,
                           "arguments": call.function.arguments or "{}"})
         return {"content": _strip_reasoning(message.content or ""), "tool_calls": calls}
+    except deadline.DeadlineExceeded:
+        counters["failures"] += 1
+        raise
     except Exception as exc:
         counters["failures"] += 1
         log.warning("llm tool call failed: %s", exc)
@@ -281,6 +345,15 @@ def extract_facts(chunk_text: str) -> list[str]:
     if raw is None:
         return []
     facts = _parse_facts(raw)[: config.LLM_MAX_FACTS]
+    if not facts and config.EXTRACT_FALLBACK:
+        # Lead L5 (P2): the personal-memory prompt keeps nothing from a chunk
+        # that is narration, a document or a table. Only such a chunk -- zero
+        # facts from the shipped prompt -- is read again, by a third-person
+        # content prompt; every other chunk is extracted exactly as before.
+        counters["fallback_extractions"] = counters.get("fallback_extractions", 0) + 1
+        again = _complete(EXTRACT_CONTENT_SYSTEM % config.LLM_MAX_FACTS, chunk_text,
+                          config.LLM_MAX_TOKENS_EXTRACT_FALLBACK)
+        facts = _parse_facts(again or "")[: config.LLM_MAX_FACTS]
     if raw and not facts:
         # The call succeeded but nothing parsed — usually a reply truncated by
         # the token cap. Without this the whole fact channel for the chunk
@@ -741,3 +814,27 @@ def classify_question(query: str, options: list[str] | None) -> dict | None:
     if not isinstance(past, bool) or not isinstance(scoped, bool):
         return None
     return {"needs_past_value": past, "time_scoped": scoped}
+
+
+# As-of evidence selection (app/asof.py): one call per distinct Search
+# question, made only when the as-of rules would change the returned set.
+ASOF_SCOPE_SYSTEM = """You read a question that will be answered from a person's memory log and say how it uses a date. The question can be in any language.
+
+- "kind":
+  - "as_of_state": it asks what something WAS at, as of, by, in or during a stated date or period: a value, title, role, status, address, city, owner, employer, team, partner, price, count or membership as it stood then. "What was Maya's job title as of September 5, 2025?" "Which team did he play for in January 1976?" "Who owned the house in 2019?" "What side project is Priya running as of 1 June, 2022?" "截至2024年1月，他住在哪里？" "2023年5月时她的职位是什么？" "¿Dónde vivía en marzo de 2019?" "Quel était son poste en janvier 1976 ?"
+  - "event": it asks about something that happened, was done, said, bought, visited or attended on or around a date, or uses the date to point at an event: "What did Tomás do on 1 September 2023?" "Where did I go on the 5th of May 2023?" "Who did I meet at the conference in June 2022?" "What happened to Ines's car on 3 July 2023?" "2023年5月8日我们聊了什么？" "¿Qué compré el 3 de julio de 2023?"
+  - "other": it names no date or period, the year is part of a name, title, model or quantity ("S.S. Lazio 1900", "the 1984 novel"), or it asks for the current value.
+- "as_of": the date or period the question names, written YYYY-MM-DD, YYYY-MM or YYYY at the precision the question gives; null when there is none.
+
+Return JSON only: {"kind": "as_of_state", "as_of": "2025-09-05"}"""
+
+
+def classify_asof(query: str, options: list[str] | None) -> dict | None:
+    """The router's JSON object ({"kind", "as_of"}), or None on any failure;
+    app/asof.py validates it."""
+    if not config.llm_available():
+        return None
+    user = f"Question: {query}"
+    if options:
+        user += "\nAnswer options: " + " | ".join(str(o) for o in options[:10])
+    return _json_object(_complete(ASOF_SCOPE_SYSTEM, user, config.LLM_MAX_TOKENS_ASOF))

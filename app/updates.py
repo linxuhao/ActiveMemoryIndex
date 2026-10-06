@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import collections
 import concurrent.futures
+import contextvars
 import functools
 import logging
 import re
@@ -34,7 +35,7 @@ import time
 
 import numpy as np
 
-from . import config, llm, store
+from . import config, deadline, llm, store
 
 log = logging.getLogger("ami.updates")
 
@@ -341,14 +342,17 @@ def detect(raw_items: list[store.Item]) -> list[dict]:
     """Detection over a chunk's verbatim turns. Failure: no records."""
     try:
         return detect_or_none(raw_items) or []
+    except deadline.DeadlineExceeded:
+        raise  # the Add cannot finish in time either; it answers 503
     except Exception:  # noqa: BLE001 - detection must never fail Add
         log.exception("update detection failed")
         return []
 
 
 def start_detection(raw_items: list[store.Item]) -> concurrent.futures.Future:
-    """Run detect() beside the extraction call so Add waits for the slower one."""
-    return _executor.submit(detect, list(raw_items))
+    """Run detect() beside the extraction call so Add waits for the slower one.
+    The Add's context (its deadline) goes with it."""
+    return _executor.submit(contextvars.copy_context().run, detect, list(raw_items))
 
 
 # --- Search -------------------------------------------------------------------
