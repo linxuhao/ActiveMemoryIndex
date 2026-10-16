@@ -355,6 +355,12 @@ ASOF_ITEMS = _int("AMI_ASOF_ITEMS", 200)
 ASOF_ITEM_CHARS = _int("AMI_ASOF_ITEM_CHARS", 400)
 LLM_MAX_TOKENS_ASOF = _int("AMI_LLM_MAX_TOKENS_ASOF", 80)
 LLM_MAX_TOKENS_ASOF_ITEMS = _int("AMI_LLM_MAX_TOKENS_ASOF_ITEMS", 3000)
+# Item-side call in batches of at most this many lines, sent in parallel, each
+# capped at LLM_MAX_TOKENS_ASOF_BATCH (1,200 lets a 50-line said-date enumeration finish; bench/results/asof_times_truncation_20261015.md:
+# a long single call degenerates into loops). A failed batch leaves only its
+# own items unjudged (never withheld). 0 (default): rc5's single call.
+ASOF_BATCH = _int("AMI_ASOF_BATCH", 0)
+LLM_MAX_TOKENS_ASOF_BATCH = _int("AMI_LLM_MAX_TOKENS_ASOF_BATCH", 1200)
 
 # --- direct corpus interaction ------------------------------------------------
 # Replace the embedding selection with a gpt-4o-mini agent that greps and reads

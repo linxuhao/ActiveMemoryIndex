@@ -313,5 +313,81 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(payload, {"times": [[0, "2023-12", "2023-12", 0]]})
         self.assertEqual(sink[0]["messages"][1]["content"], "0 | said 2023-12-01 | x in December 2023")
 
+class BatchTests(unittest.TestCase):
+    """AMI_ASOF_BATCH: the item-side call in parallel batches, each numbered from
+    0 and capped at LLM_MAX_TOKENS_ASOF_BATCH; a failed batch leaves only its own
+    items unjudged. Candidates in score order: senior, junior, promoted, bike, tea."""
+    search = SearchTests.search
+    STATE = SearchTests.STATE
+    QUESTION = "What was my title as of May 1, 2025?"
+
+    def setUp(self):
+        SearchTests.setUp(self)
+        batch = patch.multiple(config, ASOF_BATCH=2, LLM_MAX_TOKENS_ASOF_BATCH=800)
+        batch.start()
+        self.addCleanup(batch.stop)
+
+    @staticmethod
+    def judge(fail_on=None):
+        read = by_text()
+
+        def reply(numbered, max_tokens):
+            if fail_on and fail_on in numbered:
+                return None
+            return read(numbered)
+        return Fake(reply)
+
+    def test_batches_give_the_single_call_result(self):
+        judge = self.judge()
+        ids = self.search(self.QUESTION, Fake(self.STATE), judge)
+        self.assertNotIn(self.items[1].id, ids)
+        self.assertNotIn(self.items[3].id, ids)
+        self.assertIn(self.items[4].id, ids)
+        self.assertEqual(len(ids), 3)
+        calls = sorted(judge.calls, key=lambda call: call[0])
+        self.assertEqual(len(calls), 3, "5 lines in batches of 2")
+        self.assertTrue(all(max_tokens == 800 for _, max_tokens in calls))
+        self.assertTrue(all(numbered.startswith("0 | said ") for numbered, _ in calls), "each batch numbered from 0")
+        self.assertIn("0 | said 2025-03-02 | I got promoted to analyst at Brightline.\n"
+                      "1 | said 2025-11-03 | I bought a blue bike.", [numbered for numbered, _ in calls])
+
+    def test_a_failed_batch_leaves_only_its_items_unjudged(self):
+        before = asof.stats["times_batch_failures"]
+        ids = self.search(self.QUESTION, Fake(self.STATE), self.judge(fail_on="blue bike"))
+        self.assertNotIn(self.items[1].id, ids, "its batch was read: said after, no time")
+        self.assertIn(self.items[3].id, ids, "its batch failed: unjudged, never withheld")
+        self.assertEqual(asof.stats["times_batch_failures"] - before, 1)
+        self.assertNotIn(self.items[3].id, asof._times, "a failed batch is not cached")
+        self.assertIn(self.items[1].id, asof._times)
+        judge = self.judge()
+        self.search("Where did I work as of June 3, 2025?",
+                    Fake({"kind": "as_of_state", "start": "2025-06-03", "end": "2025-06-03"}), judge)
+        self.assertEqual([numbered for numbered, _ in judge.calls],
+                         ["0 | said 2025-03-02 | I got promoted to analyst at Brightline.\n"
+                          "1 | said 2025-11-03 | I bought a blue bike."], "only the failed batch is read again")
+
+    def test_all_batches_failing_withholds_nothing(self):
+        before = asof.stats["times_failures"]
+        asof.log.disabled = True
+        try:
+            ids = self.search(self.QUESTION, Fake(self.STATE), Fake(RuntimeError("boom")))
+        finally:
+            asof.log.disabled = False
+        self.assertIn(self.items[1].id, ids)
+        self.assertEqual(asof.stats["times_failures"] - before, 1)
+
+    def test_off_keeps_the_single_call(self):
+        with patch.object(config, "ASOF_BATCH", 0):
+            judge = Fake(by_text())
+            self.search(self.QUESTION, Fake(self.STATE), judge)
+        self.assertEqual(len(judge.calls), 1)
+        self.assertEqual(judge.calls[0], ("0 | said 2025-09-30 | I'm a senior analyst at Brightline these days.\n"
+                                          "1 | said 2025-01-14 | I started as a junior analyst at Brightline.\n"
+                                          "2 | said 2025-03-02 | I got promoted to analyst at Brightline.\n"
+                                          "3 | said 2025-11-03 | I bought a blue bike.\n"
+                                          "4 | said 2025-02-01 | I like green tea.",),
+                         "rc5's prompt and call, unchanged")
+
+
 if __name__ == "__main__":
     unittest.main()

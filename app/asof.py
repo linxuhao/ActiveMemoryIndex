@@ -187,10 +187,42 @@ _times: "collections.OrderedDict[str, list[tuple[Period, bool]]]" = collections.
 TIMES_MAX = 200_000
 
 
+_batch_executor = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, config.LLM_CONCURRENCY),
+                                                        thread_name_prefix="asof-batch")
+
+
+def _read(lines: list[str], max_tokens: int | None) -> dict[int, list[tuple[Period, bool]]] | None:
+    """One call over *lines* (numbered from 0 here): line -> the times it states,
+    or None when the call failed."""
+    numbered = "\n".join(f"{number} | {line}" for number, line in enumerate(lines))
+    try:
+        payload = llm.asof_times(numbered, max_tokens) if max_tokens else llm.asof_times(numbered)
+    except Exception:  # noqa: BLE001
+        log.exception("as-of time extraction failed")
+        payload = None
+    if not isinstance(payload, dict) or not isinstance(payload.get("times"), list):
+        return None
+    found: dict[int, list[tuple[Period, bool]]] = {number: [] for number in range(len(lines))}
+    for entry in payload["times"]:
+        if not isinstance(entry, list) or len(entry) != 4:
+            continue
+        try:
+            number = int(entry[0])
+        except (TypeError, ValueError):
+            continue
+        start, end = parse_iso(entry[1]), parse_iso(entry[2])
+        if number in found and start and end and start[0] <= end[1]:
+            found[number].append(((start[0], end[1]), entry[3] in (1, True)))
+    return found
+
+
 def times(items: list[store.Item]) -> dict[str, list[tuple[Period, bool]]] | None:
     """Item id -> the times its text states, [(period, span)] ([] = none), or
     None when the call failed. One gpt-4o-mini call over the items not seen
-    before (each with its stamp date, for relative references); cached per item."""
+    before (each with its stamp date, for relative references); cached per item.
+    With AMI_ASOF_BATCH, parallel calls of at most that many lines: items of a
+    failed batch are left out of the result (unjudged), None only when all failed."""
+    batch = config.ASOF_BATCH
     with _cache_lock:
         pending = [item for item in items if item.id not in _times]
     if pending:
@@ -207,35 +239,33 @@ def times(items: list[store.Item]) -> dict[str, list[tuple[Period, bool]]] | Non
             key = (when, text)
             if key not in line_of:
                 line_of[key] = len(lines)
-                lines.append(f"{len(lines)} | said {when.isoformat() if when else 'unknown'} | {text}")
+                lines.append(f"said {when.isoformat() if when else 'unknown'} | {text}")
             line_of[item.id] = line_of[key]
         stats["times_calls"] += 1
         stats["times_items"] += len(lines)
-        try:
-            payload = llm.asof_times("\n".join(lines))
-        except Exception:  # noqa: BLE001
-            log.exception("as-of time extraction failed")
-            payload = None
-        if not isinstance(payload, dict) or not isinstance(payload.get("times"), list):
+        if batch > 0:
+            starts = list(range(0, len(lines), batch))
+            stats["times_batches"] += len(starts)
+            parts = list(_batch_executor.map(
+                lambda low, context: context.run(_read, lines[low: low + batch], config.LLM_MAX_TOKENS_ASOF_BATCH),
+                starts, [contextvars.copy_context() for _ in starts]))
+            stats["times_batch_failures"] += sum(part is None for part in parts)
+            found = {low + number: value for low, part in zip(starts, parts) if part is not None
+                     for number, value in part.items()}
+        else:
+            found = _read(lines, None)
+        if not found:
             stats["times_failures"] += 1
             return None
-        found: dict[int, list[tuple[Period, bool]]] = {number: [] for number in range(len(lines))}
-        for entry in payload["times"]:
-            if not isinstance(entry, list) or len(entry) != 4:
-                continue
-            try:
-                number = int(entry[0])
-            except (TypeError, ValueError):
-                continue
-            start, end = parse_iso(entry[1]), parse_iso(entry[2])
-            if number in found and start and end and start[0] <= end[1]:
-                found[number].append(((start[0], end[1]), entry[3] in (1, True)))
         with _cache_lock:
             for item in pending:
-                _times[item.id] = found[line_of[item.id]]
+                if line_of[item.id] in found:
+                    _times[item.id] = found[line_of[item.id]]
             while len(_times) > TIMES_MAX:
                 _times.popitem(last=False)
     with _cache_lock:
+        if batch > 0:
+            return {item.id: _times[item.id] for item in items if item.id in _times}
         return {item.id: _times.get(item.id, []) for item in items}
 
 
@@ -294,7 +324,8 @@ def select_withheld(index: store.UserIndex, scores, query: str, options: list[st
     stated = times(judged)
     if stated is None:
         return set()
-    out = withhold(period, judged, returned, stated)
+    # Only items whose times were read can be withheld (a failed batch's are not).
+    out = withhold(period, [item for item in judged if item.id in stated], returned, stated)
     returned_ids = {item.id for item in returned}
     stats["applied"] += bool(out & returned_ids)
     stats["withheld"] += len(out & returned_ids)

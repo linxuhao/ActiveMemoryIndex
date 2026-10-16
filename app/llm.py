@@ -836,9 +836,9 @@ def classify_asof(query: str, options: list[str] | None) -> dict | None:
     return _json_object(_complete(ASOF_SCOPE_SYSTEM, _question(query, options), config.LLM_MAX_TOKENS_ASOF))
 
 
-def asof_times(numbered: str) -> dict | None:
+def asof_times(numbered: str, max_tokens: int | None = None) -> dict | None:
     """The time extraction's JSON object ({"times": [[n, start, end, span], ...]}),
     or None on any failure; app/asof.py validates it."""
     if not config.llm_available() or not numbered:
         return None
-    return _json_object(_complete(ASOF_ITEMS_SYSTEM, numbered, config.LLM_MAX_TOKENS_ASOF_ITEMS))
+    return _json_object(_complete(ASOF_ITEMS_SYSTEM, numbered, max_tokens or config.LLM_MAX_TOKENS_ASOF_ITEMS))
