@@ -2,6 +2,9 @@
 
 Release metadata and technical notes. Keep in sync with `README.md` and `RELEASE.md`.
 
+**Status (2026-10-16).** rc6 (rc5 plus batched as-of time reading, see `RELEASE.md`) is the
+candidate for the Full; rc5 ran the fourth platform Smoke (2026-10-06). Earlier status, kept:
+
 **Status (2026-10-06).** On 2026-10-01 the user reported submitting the access application.
 Platform Smokes have since been run (three, on 2026-10-04 and 2026-10-05); the results are
 the platform's and are not reproduced here. The **official Full has not started**. At the time
@@ -27,7 +30,7 @@ service.
 | field | value |
 |---|---|
 | System name | ActiveMemoryIndex |
-| Version | `academic-v4-20261006-rc5` (release candidate; the tag identifies the fixed commit), built on `academic-v4-20261001` |
+| Version | `academic-v4-20261016-rc6` (release candidate: rc5 plus batched as-of time reading; the tag identifies the fixed commit), built on `academic-v4-20261001` |
 | Evaluation type | Textual Memory |
 | Division / route | Academic Methods · API (self-hosted) |
 | Repository | https://github.com/linxuhao/ActiveMemoryIndex |
@@ -59,7 +62,7 @@ deployment and shared with the platform through the access-request flow (stored 
 ```bash
 git clone https://github.com/linxuhao/ActiveMemoryIndex.git
 cd ActiveMemoryIndex
-git checkout academic-v4-20261006-rc5   # the rc5 release tag
+git checkout academic-v4-20261016-rc6   # the rc6 release tag
 cp .env.academic.example .env.academic
 # Set OPENAI_API_KEY, AMI_EMBED_API_KEY, AMI_AUTH_TOKEN and region/workspace endpoint.
 AMI_ENV_FILE=.env.academic docker compose --env-file .env.academic -p ami-academic up -d --build
@@ -78,7 +81,8 @@ AMI_ENV_FILE=.env.academic docker compose --env-file .env.academic -p ami-academ
 | `AMI_EMBED_TIMEOUT` / `AMI_EMBED_RETRIES` / `AMI_EMBED_CONCURRENCY` | `40` / `1` / `16` (rc4 defaults and profile): per-attempt timeout, retries, provider requests in flight; every attempt is clipped to the request deadline |
 | `AMI_ADD_DEADLINE` / `AMI_SEARCH_DEADLINE` | `85` / `85` s from arrival (admission wait included): an upstream call the deadline leaves no time for is not made; 503 + `Retry-After`, nothing persisted |
 | `AMI_ANSWER_INPUT_TOKENS` / `AMI_ANSWER_PROMPT_TOKENS` / `AMI_ANSWER_ITEM_TOKENS` / `AMI_TOKEN_SAFETY` | `117760` / `1024` / `20` / `1.15`: token-aware return budget against the platform's Answer window (always on) |
-| `AMI_ASOF_SELECT` | `1` in the rc4 and rc5 profiles (default `0` in code): as-of evidence selection, declared below; passed its pre-registered gates (rc4, and rc5's language-neutral version) |
+| `AMI_ASOF_BATCH` | `50` in the rc6 profile (default `0` = rc5's single call): the as-of time reader in parallel calls of at most 50 lines, cap `AMI_LLM_MAX_TOKENS_ASOF_BATCH` 1,200; declared below |
+| `AMI_ASOF_SELECT` | `1` in the rc4, rc5 and rc6 profiles (default `0` in code): as-of evidence selection, declared below; passed its pre-registered gates (rc4, and rc5's language-neutral version) |
 | `AMI_ADAPTIVE_CHUNK` | `0`: adaptive chunk delivery; not recommended (rc4 gate failed; rc5 without its cap: BEAM below the baseline), not used |
 
 The release retains raw turns plus facts, extraction and recall enabled, recall weight `0.5`,
@@ -332,7 +336,10 @@ Within the same Q18 boundaries as the explicit-update mechanism:
   candidate memories of the same user not read before (what the Search would return, then the
   next ranked ones, at most 200), each with its own stamp date. It returns the times each
   memory's text states (ISO dates at the text's precision; relative times resolved against the
-  stamp) and whether each is a span. It never sees the question. Cached per memory.
+  stamp) and whether each is a span. It never sees the question. Cached per memory. rc6
+  (`AMI_ASOF_BATCH=50`): the same lines are sent as parallel calls of at most 50, each capped at
+  1,200 tokens; a failed call leaves only its own memories unread (never withheld)
+  (`bench/results/asof_batch_20261016.md`).
 * **Rules, in code on ISO dates:** (a) a memory whose spans all miss the period is withheld when
   a returned memory has a span covering it; (b) a memory said after the period that states no
   time starting by its end is withheld when a returned memory was said by its end. Event

@@ -1,3 +1,44 @@
+# Release candidate academic-v4-20261016-rc6
+
+rc6 is rc5 (`academic-v4-20261006-rc5`, `90bb326`) plus one change: the as-of time reader
+reads its candidates in parallel batches. Tag `academic-v4-20261016-rc6`; image
+`activememoryindex:academic-v4-20261016-rc6`, built from the repository Dockerfile with OCI
+labels (revision = the tagged commit). Production profile change from rc5: `AMI_IMAGE` and
+`AMI_ASOF_BATCH=50`.
+
+| step | commit | what |
+|---|---|---|
+| main after rc5 | `7a6e152` | docs only (platform requests ledger removed) |
+| rc6 code, pre-registration | `f3f69f0` | `AMI_ASOF_BATCH`, `AMI_LLM_MAX_TOKENS_ASOF_BATCH` (default 1200); `tests/test_asof.py` +4; diagnosis `bench/results/asof_times_truncation_20261015.md`; `bench/results/asof_batch_preregistration.md` |
+| rc6 result | `8f77e72` | `bench/results/asof_batch_20261016.md` |
+| rc6 | this branch | docs |
+
+**Why.** rc5's time reader read up to 200 memories in one call capped at 3,000 tokens. On large
+lists the reply sometimes degenerated (a repeated entry or block until the cap, or one line per
+memory copying its stamp date, which the rules ignore) and did not parse; that Search then
+selected nothing. Raising the cap does not help: a loop runs to any cap and 6,000 tokens take
+longer than the 25 s call timeout. Measured on the keyed-prompt study's LoCoMo lists: 19 of 72
+as-of state Searches (26 %); healthy replies are 47–473 tokens.
+
+**Change.** With `AMI_ASOF_BATCH=50` the lines (same text, numbered from 0 within each batch)
+go out as parallel calls of at most 50, each capped at `AMI_LLM_MAX_TOKENS_ASOF_BATCH` (1,200,
+enough for a 50-line stamp-date enumeration to finish). A failed batch leaves only its own items
+unjudged; unjudged items are never withheld; all batches failing withholds nothing, as rc5.
+With 0 the prompt and behaviour are rc5's byte for byte.
+
+**Validation (pre-registered, `bench/results/asof_batch_20261016.md`).**
+* 26 large-list as-of Searches (LoCoMo 24, LongMemEval temporal 1, BEAM-100K 1): failures 0
+  (rc5: 5), 64 batches, 0 batch failures, longest reply 293 tokens, Search p50 1.6 s / max 3.6 s;
+  selection applied on 21 (rc5: 17); answers LoCoMo 18.0 vs 18.5 of 24 (gate ≥ −1.0), LME and
+  BEAM equal.
+* rc5's as-of validation sets rebuilt fresh: TempReason L2 150 (150, 150 = 150, 150), L3 100
+  (81, 83 = 81, 83), six-language synthetic 288 incl. "now" (280, 278 = 280, 278); failures 0 = 0.
+* A robustness fix, not a measured score gain: on the four questions rc5 left unselected the
+  answers did not change.
+* Suite: 31 test files, 0 failed (network-free, in the image).
+
+---
+
 # Release candidate academic-v4-20261006-rc5
 
 rc5 is the release candidate for the official Full: rc4 (`academic-v4-20261006-rc4`, commit

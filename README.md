@@ -3,7 +3,7 @@
 An Add/Search memory system for the [Agent Memory Leaderboard](https://agentmemories.ai) (Agent
 Memory Challenge 2026, Academic Methods track, Textual Memory).
 
-**Release candidate `academic-v4-20261006-rc5`** (built on the `academic-v4-20261001` release):
+**Release candidate `academic-v4-20261016-rc6`** (rc5 plus batched as-of time reading; built on the `academic-v4-20261001` release):
 `text-embedding-v4` (1024 dimensions, separate credentials and endpoint) for embeddings and
 `gpt-4o-mini` as the only LLM, for fact extraction, recall questions, the explicit-update
 mechanism and the as-of question classifier and time reader below. BGE (`bge-small-en-v1.5`) is historical local research only and is not part
@@ -53,7 +53,7 @@ at retrieval time than any amount of query rewriting in the question's register.
 ```bash
 git clone https://github.com/linxuhao/ActiveMemoryIndex.git
 cd ActiveMemoryIndex
-git checkout academic-v4-20261006-rc5   # the rc5 release tag
+git checkout academic-v4-20261016-rc6   # the rc6 release tag
 cp .env.academic.example .env.academic
 # Edit .env.academic: OPENAI_API_KEY, AMI_EMBED_API_KEY, AMI_AUTH_TOKEN,
 # and AMI_EMBED_BASE_URL for the embedding key's region/workspace.
@@ -161,7 +161,8 @@ All configuration is environment variables; **no credential is stored in this re
 | `AMI_ANSWER_INPUT_TOKENS` / `AMI_ANSWER_PROMPT_TOKENS` / `AMI_ANSWER_ITEM_TOKENS` / `AMI_TOKEN_SAFETY` | `117760` / `1024` / `20` / `1.15` | token-aware return budget (always on): memories get (input − prompt) / safety − tokens(query + options), each costing its tokens + 20; counted with tiktoken `o200k_base`. See "rc4" |
 | `AMI_TOKEN_ENCODING` | `o200k_base` | tiktoken encoding; without tiktoken a conservative estimate is used |
 | `AMI_ADD_DEADLINE` / `AMI_SEARCH_DEADLINE` | `85` / `85` | seconds from arrival (admission wait included) within which every upstream call of the request must finish; otherwise 503 + `Retry-After` before persistence. `0` = none |
-| `AMI_ASOF_SELECT` | `0` (rc4/rc5 profile: `1`) | as-of evidence selection; `AMI_ASOF_ITEMS` (`200`) candidates read by the time reader, each cut to `AMI_ASOF_ITEM_CHARS` (`400`). See "rc5" |
+| `AMI_ASOF_BATCH` | `0` (rc6 profile: `50`) | as-of time reader in parallel calls of at most this many lines, each capped at `AMI_LLM_MAX_TOKENS_ASOF_BATCH` (`1200`); a failed batch leaves only its items unjudged. 0 = rc5's single call. See "rc6" |
+| `AMI_ASOF_SELECT` | `0` (rc4/rc5/rc6 profile: `1`) | as-of evidence selection; `AMI_ASOF_ITEMS` (`200`) candidates read by the time reader, each cut to `AMI_ASOF_ITEM_CHARS` (`400`). See "rc5" |
 | `AMI_ADAPTIVE_CHUNK` | `0` | adaptive chunk delivery (S characters; 0 = off), bounded by the token budget. Not recommended (rc4 and rc5 studies); leave 0 |
 | `AMI_AGENTIC_SEARCH` | `0` | after retrieval, gpt-4o-mini reflects on gaps and may fire a second recall question. Off by default — measured at zero end-to-end gain when the full `top_k` is returned, at the cost of one extra LLM call per search |
 | `AMI_EMBED_BACKEND` | `bge` | `openai` selects the remote academic adapter; the academic profile explicitly sets it |
@@ -478,6 +479,19 @@ selection only, declared under FAQ Q18 in `SUBMISSION.md`.
 or merged spans as single memories: +5.6 points on 770 held-out LoCoMo questions, but exactly
 the score of an equal-text control that keeps the shipped unit, so the gain is returned volume,
 not the unit; it failed its pre-registered gate (`bench/results/adaptive_chunk_20261006.md`).
+
+## rc6: batched as-of time reading
+
+rc5's as-of time reader read up to 200 candidate memories in one `gpt-4o-mini` call capped at
+3,000 tokens. On large lists the reply sometimes degenerated (repeating entries, or copying every
+line's stamp date) and hit the cap; the reply then did not parse and that Search selected
+nothing. On the 72 as-of state Searches of a LoCoMo study this happened 19 times (26 %)
+(`bench/results/asof_times_truncation_20261015.md`). rc6 sends the same lines as parallel calls
+of at most 50 (`AMI_ASOF_BATCH=50`, cap 1,200 each); a failed batch leaves only its own 50 items
+unjudged (never withheld). Pre-registered check (`bench/results/asof_batch_20261016.md`): on 26
+large-list as-of Searches 0 failures (rc5: 5), selection applied on 21 (rc5: 17), answers within
+0.5 of rc5; on rc5's as-of validation sets (TempReason L2/L3, six-language synthetic, "now")
+answers identical replicate by replicate. A robustness fix, not a measured score gain.
 
 ## rc5: no language-dependent heuristics
 
