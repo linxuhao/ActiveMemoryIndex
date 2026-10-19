@@ -17,7 +17,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import asof, config, dci, deadline, embed, llm, rerank, store, tokens, updates
+from . import asof, config, dci, deadline, embed, lexical, llm, rerank, store, tokens, updates
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("ami")
@@ -886,6 +886,9 @@ def _search(request: SearchRequest) -> dict:
     asof_future = (asof.start_classify(request.query, request.options)
                    if config.ASOF_SELECT and config.llm_available() else None)
     scores1 = rank(index, request.query, request.options)
+    # The raw query, not the recall rewrite: the rewrite paraphrases, and the
+    # point of this channel is the literal string.
+    scores1 = lexical.fuse(index, scores1, request.query)
     if config.RERANK_MODEL:
         scores1 = rerank.rescore(index, request.query, scores1)
 

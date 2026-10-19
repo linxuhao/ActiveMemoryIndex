@@ -395,6 +395,20 @@ RERANK_CANDIDATES = _int("AMI_RERANK_CANDIDATES", 200)
 RERANK_MAX_LENGTH = _int("AMI_RERANK_MAX_LENGTH", 256)
 RERANK_BATCH = _int("AMI_RERANK_BATCH", 32)
 
+# Lexical channel (app/lexical.py): BM25 over character trigrams of the raw
+# query, fused with the dense ranking by reciprocal rank. Trigrams match
+# substrings in any script, the way grep does, so an identifier, a path or an
+# error string reaches the item that contains it even when the embedding of a
+# whole sentence does not. Off by default; the index is built in memory per
+# user on first use, so a store served with it off is untouched.
+LEXICAL = _env("AMI_LEXICAL", "0") != "0"
+LEXICAL_CANDIDATES = _int("AMI_LEXICAL_CANDIDATES", 200)
+LEXICAL_RRF_K = _int("AMI_LEXICAL_RRF_K", 60)
+# Bound on the postings of all built indexes together (~10 bytes each, so the
+# default is about 2 GB); past it, the least recently searched user's index is
+# dropped and rebuilt on demand.
+LEXICAL_MAX_POSTINGS = _int("AMI_LEXICAL_MAX_POSTINGS", 200_000_000)
+
 # --- memory ------------------------------------------------------------------
 # Upper bound on rows held in the per-user vector cache, across all users. The
 # cache is a read-through of SQLite, so eviction costs a reload, never a result.
