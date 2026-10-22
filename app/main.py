@@ -105,6 +105,26 @@ async def _overloaded(send, retry_after: int) -> None:
     await send({"type": "http.response.body", "body": body})
 
 
+class CodingPaths:
+    """AMI_CODING_PATHS=1: /add and /search are served by the coding routes.
+
+    The platform binds one endpoint per key for every track and version, so
+    the coding version cannot have URLs of its own; it is declared as a new
+    version on the same /add and /search, and this switch selects its
+    behaviour. Registered before the admission valve, so the valve still sees
+    and bounds the original paths."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if config.CODING_PATHS and scope["type"] == "http" and scope.get("path") in ("/add", "/search"):
+            path = "/coding" + scope["path"]
+            scope = {**scope, "path": path, "raw_path": path.encode()}
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(CodingPaths)
 app.add_middleware(AdmissionValve)
 
 

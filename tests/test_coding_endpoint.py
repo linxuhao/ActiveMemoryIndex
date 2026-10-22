@@ -95,6 +95,23 @@ ok &= check(any("zq_merge_cursor" in d["content"] for d in data), "the exact ide
 ok &= check(calls == [], "grouped search makes no LLM call")
 ok &= check(all("Miso" not in d["content"] for d in data), "grep block stays inside the coding user")
 
+# AMI_CODING_PATHS: the platform's own /add and /search serve the coding routes.
+config.CODING_PATHS = True
+calls.clear()
+r = add("/add", "u3", "p1", "Segfault in render/blit.c fixed by checking the surface pitch.")
+ok &= check(r.status_code == 200 and r.json()["user_id"] == "u3", "switched /add returns 200 and echoes the user_id")
+r = client.post("/search", json={"query": "render/blit.c", "user_id": "u3", "top_k": 5})
+data = r.json()["data"]
+ok &= check(r.status_code == 200 and data and all(d["source"] in ("semantic", "grep") for d in data),
+            "switched /search returns the labelled groups")
+ok &= check(calls == [], "switched routes make no LLM call")
+r = client.post("/coding/search", json={"query": "render/blit.c", "user_id": "u3", "top_k": 5})
+ok &= check(any("blit.c" in d["content"] for d in r.json()["data"]), "switched /add stored under the coding namespace")
+ok &= check(client.head("/add").status_code == 405, "HEAD /add is still 405 when switched")
+config.CODING_PATHS = False
+r = client.post("/search", json={"query": "render/blit.c", "user_id": "u3", "top_k": 5})
+ok &= check(r.json()["data"] == [], "switch off: /search is the textual route again")
+
 for path in ("/coding/add", "/coding/search"):
     ok &= check(client.head(path).status_code == 405, f"HEAD {path} is 405 like the textual routes")
 

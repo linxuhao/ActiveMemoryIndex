@@ -396,6 +396,10 @@ RERANK_CANDIDATES = _int("AMI_RERANK_CANDIDATES", 200)
 RERANK_MAX_LENGTH = _int("AMI_RERANK_MAX_LENGTH", 256)
 RERANK_BATCH = _int("AMI_RERANK_BATCH", 32)
 
+# Serve /add and /search with the coding routes (app/main.py CodingPaths): the
+# platform keeps one endpoint per key, so the coding version runs on it.
+CODING_PATHS = _env("AMI_CODING_PATHS", "0") != "0"
+
 # Lexical postings (app/lexical.py) for the coding routes' grep block: bound
 # on the postings of all built indexes together (~10 bytes each, so the
 # default is about 2 GB); past it, the least recently searched user's index is
