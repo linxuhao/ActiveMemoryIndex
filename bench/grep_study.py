@@ -19,6 +19,8 @@ plain query, so the only difference between arms is AMI_LEXICAL.
 from __future__ import annotations
 
 import collections
+
+import numpy as np
 import datetime as dt
 import json
 import re
@@ -83,8 +85,21 @@ def main_(data: Path, out: Path) -> None:
                 queries.append((rid, form, text, task["repo"], gold))
 
     results = []
-    for arm in ("dense", "lexical"):
-        config.LEXICAL = arm == "lexical"
+    from app import lexical
+    dense_fuse = lexical.fuse
+
+    def grep_only(user_index, scores, query):
+        # No embedding in the ranking: BM25 alone; rows with no hit keep store order.
+        if not len(scores):
+            return scores
+        with store._lock:
+            lex = lexical._index(user_index).scores(query)
+        return np.where(np.isfinite(scores), lex.astype(np.float64), -np.inf)
+
+    for arm in ("dense", "lexical", "grep"):
+        config.LEXICAL = arm != "dense"
+        lexical.fuse = grep_only if arm == "grep" else dense_fuse
+        main.lexical.fuse = lexical.fuse
         for rid, form, text, user, gold in queries:
             data = main.search(main.SearchRequest(query=text, user_id=user, top_k=100), None, None)["data"]
             sources = [owner.get(d["id"].rsplit("-", 1)[0]) for d in data]

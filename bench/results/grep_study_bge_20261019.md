@@ -45,3 +45,19 @@ Reading:
 Caveats: a proxy, not CAMBench; stores are small (one repository's experience,
 ~19 tasks on average), so hit@100 is near its ceiling; the platform's query
 form is unpublished; BGE, not text-embedding-v4; no extracted facts.
+
+## Grep only, no embedding in the ranking (2026-10-22)
+
+Third arm, same store and queries: rank by trigram BM25 alone (rows with no hit
+keep store order). The dense and fused arms reproduced the numbers above exactly.
+
+| query form | dense | fused | grep only | grep vs dense @100 (wins / losses) |
+|---|---|---|---|---|
+| full issue text, hit@10 / @100 | .838 / .941 | .782 / .938 | .633 / .854 | 4 / 35, p=3e-7 |
+| first 200 chars | .815 / .938 | .804 / .941 | .700 / .885 | 6 / 25, p=0.0009 |
+| file paths | .608 / .880 | .678 / .894 | .667 / .880 | 8 / 8, p=1 |
+
+Grep alone loses 5-9 points inside the returned 100 on natural-language
+queries and only ties on path queries; it also returns the most text (202k
+chars vs 161k dense). As a coding retrieval it is not a substitute for
+embeddings; fusion stays roughly neutral at 100.
