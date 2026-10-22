@@ -1,6 +1,7 @@
 """Runtime configuration, all through environment variables."""
 from __future__ import annotations
 
+import contextvars
 import os
 
 
@@ -469,5 +470,10 @@ def auth_misconfigured() -> str | None:
     return None
 
 
+# Set for the duration of a /coding request: that track makes no LLM call of
+# any kind (no extraction, rewrite, update detection or as-of reading).
+LLM_OFF: contextvars.ContextVar[bool] = contextvars.ContextVar("ami_llm_off", default=False)
+
+
 def llm_available() -> bool:
-    return bool(LLM_API_KEY)
+    return bool(LLM_API_KEY) and not LLM_OFF.get()

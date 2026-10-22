@@ -864,6 +864,44 @@ def search(
     return result
 
 
+
+# Coding track (its own platform version and URLs). Same store, but every
+# user_id is namespaced so coding and textual data never meet, and no LLM call
+# of any kind is made: retrieval is embedding-only over the verbatim turns.
+CODING_PREFIX = "coding:"
+
+
+@app.post("/coding/add", response_model=AddResponse)
+def coding_add(
+    request: AddRequest,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None),
+    http: Request = None,
+) -> AddResponse:
+    token = config.LLM_OFF.set(True)
+    try:
+        add(request.model_copy(update={"user_id": CODING_PREFIX + request.user_id}),
+            authorization, x_api_key, http)
+    finally:
+        config.LLM_OFF.reset(token)
+    return AddResponse(success=True, request_id=request.request_id,
+                       user_id=request.user_id, session_id=request.session_id)
+
+
+@app.post("/coding/search")
+def coding_search(
+    request: SearchRequest,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None),
+    http: Request = None,
+) -> dict:
+    token = config.LLM_OFF.set(True)
+    try:
+        return search(request.model_copy(update={"user_id": CODING_PREFIX + request.user_id}),
+                      authorization, x_api_key, http)
+    finally:
+        config.LLM_OFF.reset(token)
+
 def _search(request: SearchRequest) -> dict:
     if request.top_k <= 0:
         return {"data": []}
