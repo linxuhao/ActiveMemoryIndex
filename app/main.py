@@ -15,7 +15,7 @@ import time
 import numpy as np
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import asof, config, dci, deadline, embed, llm, rerank, store, tokens, updates
 
@@ -154,6 +154,17 @@ class Message(BaseModel):
     role: str
     content: str
     timestamp: int | None = None
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def text_parts(cls, value):
+        """Multimodal content arrives as a list of parts. Text-only service: keep
+        the parts' text in order and drop images, so such an Add is stored rather
+        than rejected with 422. A plain string is unchanged."""
+        if isinstance(value, list):
+            return "\n".join(part["text"] for part in value
+                             if isinstance(part, dict) and isinstance(part.get("text"), str))
+        return value
 
 
 class AddRequest(BaseModel):
