@@ -61,3 +61,20 @@ Grep alone loses 5-9 points inside the returned 100 on natural-language
 queries and only ties on path queries; it also returns the most text (202k
 chars vs 161k dense). As a coding retrieval it is not a substitute for
 embeddings; fusion stays roughly neutral at 100.
+
+## Grouped return instead of fusion (2026-10-22, `bench/grep_split.py`)
+
+Semantic block first, then a grep block of the best BM25 matches not already
+shown (zvec-grep keeps query groups apart the same way). Share of slots given
+to the grep block; wins/losses vs semantic alone:
+
+| query | k | semantic | grep 20 % | grep 30 % | grep 50 % |
+|---|---|---|---|---|---|
+| issue text | 10 | .838 | .835 (+7/-8) | .832 (+8/-10) | .815 (+9/-17, p=0.17) |
+| issue text | 100 | .941 | .941 | .941 | .938 |
+| file paths | 10 | .608 | .641 (+22/-10, p=0.05) | .655 (+28/-11, p=0.01) | .683 (+37/-10, p=1e-4) |
+| file paths | 100 | .880 | .882 | .877 | .880 |
+
+Grouping keeps the semantic ranking intact for natural-language queries,
+which rank fusion did not (.782), and still gives identifier queries most of
+the grep gain. 30 % is used by the coding routes (feature/coding-endpoint-20261022).
