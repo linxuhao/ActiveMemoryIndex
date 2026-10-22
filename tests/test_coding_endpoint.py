@@ -71,6 +71,30 @@ ok &= check(r.status_code == 200 and not any("Miso" in d["content"] for d in r.j
 r = add("/coding/add", "u1", "c1", "Traceback in tokenize.py: IndexError on empty input; fixed by guarding len(tokens).")
 ok &= check(r.status_code == 200, "a repeated coding request_id is accepted (idempotent)")
 
+# Grouped return: a semantic block, then a grep block of matches it missed.
+filler = ["Refactored the logging setup to use a rotating file handler.",
+          "Bumped the CI matrix to include Python 3.12 and dropped 3.8.",
+          "Renamed the settings module and updated imports across the package.",
+          "Documented the release process in CONTRIBUTING.md.",
+          "Cached the parsed configuration to avoid re-reading it per request.",
+          "Fixed flaky network test by mocking the HTTP session.",
+          "Moved fixtures into conftest.py and removed duplicates.",
+          "Added type hints to the public API of the client module."]
+for n, text in enumerate(filler):
+    add("/coding/add", "u2", f"f{n}", text)
+add("/coding/add", "u2", "target", "KeyError: 'zq_merge_cursor' raised in sync/merge_cursor.py when the cursor is reset.")
+calls.clear()
+r = client.post("/coding/search", json={"query": "zq_merge_cursor", "user_id": "u2", "top_k": 4})
+data = r.json()["data"]
+ok &= check(r.status_code == 200 and len(data) == 4, "grouped search returns top_k items")
+ok &= check(len({d["id"] for d in data}) == len(data), "no item appears twice")
+ok &= check([d["source"] for d in data][:3] == ["semantic"] * 3 and data[3]["source"] in ("grep", "semantic"),
+            "semantic block first, then the grep block")
+ok &= check(all(d["content"].startswith(d["source"] + ": ") for d in data), "each item is labelled with its group")
+ok &= check(any("zq_merge_cursor" in d["content"] for d in data), "the exact identifier's item is returned")
+ok &= check(calls == [], "grouped search makes no LLM call")
+ok &= check(all("Miso" not in d["content"] for d in data), "grep block stays inside the coding user")
+
 for path in ("/coding/add", "/coding/search"):
     ok &= check(client.head(path).status_code == 405, f"HEAD {path} is 405 like the textual routes")
 

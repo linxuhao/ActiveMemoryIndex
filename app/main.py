@@ -17,7 +17,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import asof, config, dci, deadline, embed, llm, rerank, store, tokens, updates
+from . import asof, config, dci, deadline, embed, lexical, llm, rerank, store, tokens, updates
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("ami")
@@ -867,8 +867,15 @@ def search(
 
 # Coding track (its own platform version and URLs). Same store, but every
 # user_id is namespaced so coding and textual data never meet, and no LLM call
-# of any kind is made: retrieval is embedding-only over the verbatim turns.
+# of any kind is made. Search returns two labelled groups, the way zvec-grep
+# keeps query groups apart instead of fusing them: the semantic ranking, then
+# a grep block (character-trigram BM25, app/lexical.py) of matches the
+# semantic block did not already show. On the SWE-ContextBench proxy a 30 %
+# grep block left natural-language queries level with semantic alone and
+# raised file-path queries +4.7 pt at 10, where rank fusion had cost the
+# former 5.6 pt (bench/results/grep_study_bge_20261019.md).
 CODING_PREFIX = "coding:"
+CODING_GREP_SHARE = 0.3
 
 
 @app.post("/coding/add", response_model=AddResponse)
@@ -895,12 +902,26 @@ def coding_search(
     x_api_key: str | None = Header(default=None),
     http: Request = None,
 ) -> dict:
+    namespaced = request.model_copy(update={"user_id": CODING_PREFIX + request.user_id})
     token = config.LLM_OFF.set(True)
     try:
-        return search(request.model_copy(update={"user_id": CODING_PREFIX + request.user_id}),
-                      authorization, x_api_key, http)
+        semantic = search(namespaced, authorization, x_api_key, http)["data"]
     finally:
         config.LLM_OFF.reset(token)
+    if not semantic:
+        return {"data": []}
+    size = len(semantic)
+    lead = semantic[: size - int(size * CODING_GREP_SHARE)]
+    matches = lexical.grep(store.get(namespaced.user_id), request.query, size - len(lead),
+                           {d["id"] for d in lead})
+    shown = {d["id"] for d in lead} | {item.id for item, _ in matches}
+    rest = [d for d in semantic[len(lead):] if d["id"] not in shown][: size - len(lead) - len(matches)]
+    grep_block = [{"id": item.id, "content": item.content, "score": score,
+                   **({"created_at": item.created_at} if item.created_at else {})}
+                  for item, score in matches]
+    return {"data": [{**d, "content": "semantic: " + d["content"], "source": "semantic"} for d in lead]
+            + [{**d, "content": "grep: " + d["content"], "source": "grep"} for d in grep_block]
+            + [{**d, "content": "semantic: " + d["content"], "source": "semantic"} for d in rest]}
 
 def _search(request: SearchRequest) -> dict:
     if request.top_k <= 0:

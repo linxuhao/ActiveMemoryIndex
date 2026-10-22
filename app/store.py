@@ -110,6 +110,9 @@ class UserIndex:
         # fact key -> rows of the facts carrying it, so a returned fact finds
         # the later statements of the same attribute without a scan.
         self.by_key: dict[str, list[int]] = {}
+        # Lexical postings (app/lexical.py), built on the first lexical search
+        # and extended by append() after that.
+        self.lexical = None
 
     def append(self, items: list[Item], vectors: np.ndarray) -> None:
         for offset, item in enumerate(items):
@@ -119,6 +122,8 @@ class UserIndex:
                 self.by_chunk.setdefault(item.id.rsplit("-", 1)[0], []).append(row)
             elif item.kind == "fact" and item.fact_key:
                 self.by_key.setdefault(item.fact_key, []).append(row)
+        if self.lexical is not None:
+            self.lexical.extend([item.content for item in items])
         self.items.extend(items)
         self.matrix = vectors if self.matrix is None else np.vstack([self.matrix, vectors])
 

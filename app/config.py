@@ -396,6 +396,12 @@ RERANK_CANDIDATES = _int("AMI_RERANK_CANDIDATES", 200)
 RERANK_MAX_LENGTH = _int("AMI_RERANK_MAX_LENGTH", 256)
 RERANK_BATCH = _int("AMI_RERANK_BATCH", 32)
 
+# Lexical postings (app/lexical.py) for the coding routes' grep block: bound
+# on the postings of all built indexes together (~10 bytes each, so the
+# default is about 2 GB); past it, the least recently searched user's index is
+# dropped and rebuilt on demand.
+LEXICAL_MAX_POSTINGS = _int("AMI_LEXICAL_MAX_POSTINGS", 200_000_000)
+
 # --- memory ------------------------------------------------------------------
 # Upper bound on rows held in the per-user vector cache, across all users. The
 # cache is a read-through of SQLite, so eviction costs a reload, never a result.
